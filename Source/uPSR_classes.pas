@@ -508,8 +508,8 @@ type
   public
     procedure BITS_W( T: BOOLEAN; t1: INTEGER);
     procedure BITS_R( var T: BOOLEAN; t1: INTEGER);
-    procedure SIZE_R( T: INTEGER);
-    procedure SIZE_W( var T: INTEGER);
+    procedure SIZE_W( T: INTEGER);
+    procedure SIZE_R( var T: INTEGER);
   end;
 
 procedure TBits_PSHelper.BITS_W( T: BOOLEAN; t1: INTEGER);
@@ -522,12 +522,12 @@ begin
   T := Self.Bits[t1];
 end;
 
-procedure TBits_PSHelper.SIZE_R( T: INTEGER);
+procedure TBits_PSHelper.SIZE_W( T: INTEGER);
 begin
   Self.SIZE := T;
 end;
 
-procedure TBits_PSHelper.SIZE_W( var T: INTEGER);
+procedure TBits_PSHelper.SIZE_R( var T: INTEGER);
 begin
   T := Self.SIZE;
 end;
@@ -546,8 +546,8 @@ end;
 
 procedure TBITSBITS_W(Self: TBITS; T: BOOLEAN; t1: INTEGER); begin Self.BITS[t1] := T; end;
 procedure TBITSBITS_R(Self: TBITS; var T: BOOLEAN; t1: INTEGER); begin T := Self.Bits[t1]; end;
-procedure TBITSSIZE_R(Self: TBITS; T: INTEGER); begin Self.SIZE := T; end;
-procedure TBITSSIZE_W(Self: TBITS; var T: INTEGER); begin T := Self.SIZE; end;
+procedure TBITSSIZE_W(Self: TBITS; T: INTEGER); begin Self.SIZE := T; end;
+procedure TBITSSIZE_R(Self: TBITS; var T: INTEGER); begin T := Self.SIZE; end;
 
 procedure RIRegisterTBITS(Cl: TPSRuntimeClassImporter);
 begin
@@ -645,10 +645,10 @@ end;
 type
   THandleStream_PSHelper = class helper for THandleStream
   public
-    procedure HANDLE_R(var T: INTEGER);
+    procedure HANDLE_R(var T: THandle);
   end;
 
-procedure THandleStream_PSHelper.HANDLE_R(var T: INTEGER);
+procedure THandleStream_PSHelper.HANDLE_R(var T: THandle);
 begin
   T := Self.HANDLE;
 end;
@@ -663,7 +663,7 @@ begin
 end;
 
 {$ELSE}
-procedure THANDLESTREAMHANDLE_R(Self: THANDLESTREAM; var T: INTEGER); begin T := Self.HANDLE; end;
+procedure THANDLESTREAMHANDLE_R(Self: THANDLESTREAM; var T: THandle); begin T := Self.HANDLE; end;
 
 procedure RIRegisterTHANDLESTREAM(Cl: TPSRuntimeClassImporter);
 begin
@@ -681,22 +681,23 @@ end;
 {$IFDEF DELPHI10UP}{$REGION 'TFilestream'}{$ENDIF}
 
 {$IFDEF class_helper_present}
+(*
 type
   TFilestream_PSHelper = class helper for TFilestream
   public
   {$IFDEF FPC}
-    function Create(filename: string; mode: word): TFileStream;
+    function Create(filename: string; mode: word): TFileStream; overload;
   {$ENDIF}
   end;
 
 {$IFDEF FPC}
 // mh: because FPC doesn't handle pointers to overloaded functions
-function TFileStream.Create(filename: string; mode: word): TFileStream;
+function TFilestream_PSHelper.Create(filename: string; mode: word): TFileStream;
 begin
-  result := TFilestream.Create(filename, mode);
+  result := Classes.TFileStream.Create(filename, mode);
 end;
 {$ENDIF}
-
+*)
 procedure RIRegisterTFILESTREAM(Cl: TPSRuntimeClassImporter);
 begin
   with Cl.Add(TFILESTREAM) do
@@ -737,13 +738,13 @@ end;
 {$ENDIF}
 
 {$IFDEF class_helper_present}
+{$IFDEF STRINGSTREAMFIX}
 type
   TStringStream_PSHelper = class helper for TStringStream
   public
     function CreateString(AHidden1: Pointer; AHidden2: Byte; const AString: string): TStringStream;
   end;
 
-{$IFDEF STRINGSTREAMFIX}
 function TStringStream_PSHelper.CreateString(AHidden1: Pointer; AHidden2: Byte; const AString: string): TStringStream;
 begin
   Result := TStringStream.Create(AString);

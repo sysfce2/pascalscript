@@ -495,6 +495,7 @@ begin
     Pos := LastPos;
     Row := LastRow;
     Col := LastCol;
+    Fn := LastFn;
     Result := True;
   end else
   begin
@@ -524,8 +525,8 @@ function TPSCustomDebugExec.GetCallStack(var Count: Cardinal): tbtString;
     I: Integer;
   begin
     Result := '';
-    if ParamList.Count > 0 then
-    for I := 0 to ParamList.Count do
+    if ParamList = nil then Exit;
+    for I := 0 to ParamList.Count-1 do
       if (ParamList.Items[I] = 'Result') or (ParamList.Items[I] = '') then
         Continue
       else

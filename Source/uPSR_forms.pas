@@ -16,7 +16,7 @@ procedure RIRegister_Forms(Cl: TPSRuntimeClassImporter);
 
 implementation
 uses
-  sysutils, classes, {$IFDEF CLX}QControls, QForms, QGraphics{$ELSE}Controls, Forms, Graphics{$ENDIF};
+  sysutils, classes, {$IFDEF CLX}QControls, QForms, QGraphics{$ELSE}Windows, Controls, Forms, Graphics{$ENDIF};
 
 {$IFDEF DELPHI10UP}{$REGION 'TControlScrollBar'}{$ENDIF}
 {$IFDEF class_helper_present}
@@ -98,7 +98,7 @@ type
     procedure ACTIVE_R(var T: BOOLEAN);
     procedure CANVAS_R(var T: TCANVAS);
     {$IFNDEF CLX}
-    procedure CLIENTHANDLE_R(var T: Longint);
+    procedure CLIENTHANDLE_R(var T: HWND);
     {$ENDIF}
   end;
 
@@ -123,7 +123,7 @@ procedure TForm_PSHelper.MODALRESULT_R(var T: TMODALRESULT); begin T := Self.MOD
 procedure TForm_PSHelper.ACTIVE_R(var T: BOOLEAN); begin T := Self.ACTIVE; end;
 procedure TForm_PSHelper.CANVAS_R(var T: TCANVAS); begin T := Self.CANVAS; end;
 {$IFNDEF CLX}
-procedure TForm_PSHelper.CLIENTHANDLE_R(var T: Longint); begin T := Self.CLIENTHANDLE; end;
+procedure TForm_PSHelper.CLIENTHANDLE_R(var T: HWND); begin T := Self.CLIENTHANDLE; end;
 {$ENDIF}
 
 { Innerfuse Pascal Script Class Import Utility (runtime) }
@@ -148,7 +148,6 @@ begin
  {$IFNDEF FPC}
 {$IFNDEF CLX}
     RegisterMethod(@TForm.ARRANGEICONS, 'ArrangeIcons');
-    RegisterMethod(@TForm.GETFORMIMAGE, 'GetFormImage');
     RegisterMethod(@TForm.PRINT, 'Print');
     RegisterMethod(@TForm.SENDCANCELMODE, 'SendCancelMode');
     RegisterPropertyHelper(@TForm.ACTIVEOLECONTROL_R, @TForm.ACTIVEOLECONTROL_W, 'ActiveOleControl');
@@ -196,7 +195,7 @@ procedure TFORMMODALRESULT_R(Self: TFORM; var T: TMODALRESULT); begin T := Self.
 procedure TFORMACTIVE_R(Self: TFORM; var T: BOOLEAN); begin T := Self.ACTIVE; end;
 procedure TFORMCANVAS_R(Self: TFORM; var T: TCANVAS); begin T := Self.CANVAS; end;
 {$IFNDEF CLX}
-procedure TFORMCLIENTHANDLE_R(Self: TFORM; var T: Longint); begin T := Self.CLIENTHANDLE; end;
+procedure TFORMCLIENTHANDLE_R(Self: TFORM; var T: HWND); begin T := Self.CLIENTHANDLE; end;
 {$ENDIF}
 
 { Innerfuse Pascal Script Class Import Utility (runtime) }
@@ -213,7 +212,11 @@ begin
     RegisterMethod(@TFORM.CLOSE, 'Close');
     RegisterMethod(@TFORM.HIDE, 'Hide');
     RegisterMethod(@TFORM.SHOW, 'Show');
+    {$IFDEF DELPHI_SEATTLE_UP}
+    RegisterVirtualMethod(@TFORM.SHOWMODAL, 'ShowModal');
+    {$ELSE}
     RegisterMethod(@TFORM.SHOWMODAL, 'ShowModal');
+    {$ENDIF}
     RegisterMethod(@TFORM.RELEASE, 'Release');
     RegisterPropertyHelper(@TFORMACTIVE_R, nil, 'Active');
 
@@ -221,7 +224,6 @@ begin
  {$IFNDEF FPC}
 {$IFNDEF CLX}
     RegisterMethod(@TFORM.ARRANGEICONS, 'ArrangeIcons');
-    RegisterMethod(@TFORM.GETFORMIMAGE, 'GetFormImage');
     RegisterMethod(@TFORM.PRINT, 'Print');
     RegisterMethod(@TFORM.SENDCANCELMODE, 'SendCancelMode');
     RegisterPropertyHelper(@TFORMACTIVEOLECONTROL_R, @TFORMACTIVEOLECONTROL_W, 'ActiveOleControl');
@@ -258,10 +260,10 @@ type
     {$IFNDEF FPC}
     procedure ACTIVE_R(var T: BOOLEAN);
     {$IFNDEF CLX}
-    procedure DIALOGHANDLE_R(var T: Longint);
-    procedure DIALOGHANDLE_W(T: Longint);
-    procedure HANDLE_R(var T: Longint);
-    procedure HANDLE_W(T: Longint);
+    procedure DIALOGHANDLE_R(var T: HWND);
+    procedure DIALOGHANDLE_W(T: HWND);
+    procedure HANDLE_R(var T: HWND);
+    procedure HANDLE_W(T: HWND);
     procedure UPDATEFORMATSETTINGS_R(var T: BOOLEAN);
     procedure UPDATEFORMATSETTINGS_W(T: BOOLEAN);
     {$ENDIF}
@@ -316,10 +318,10 @@ type
 {$IFNDEF FPC}
 procedure TApplication_PSHelper.ACTIVE_R(var T: BOOLEAN); begin T := Self.ACTIVE; end;
 {$IFNDEF CLX}
-procedure TApplication_PSHelper.DIALOGHANDLE_R(var T: Longint); begin T := Self.DIALOGHANDLE; end;
-procedure TApplication_PSHelper.DIALOGHANDLE_W(T: Longint); begin Self.DIALOGHANDLE := T; end;
-procedure TApplication_PSHelper.HANDLE_R(var T: Longint); begin T := Self.HANDLE; end;
-procedure TApplication_PSHelper.HANDLE_W(T: Longint); begin Self.HANDLE := T; end;
+procedure TApplication_PSHelper.DIALOGHANDLE_R(var T: HWND); begin T := Self.DIALOGHANDLE; end;
+procedure TApplication_PSHelper.DIALOGHANDLE_W(T: HWND); begin Self.DIALOGHANDLE := T; end;
+procedure TApplication_PSHelper.HANDLE_R(var T: HWND); begin T := Self.HANDLE; end;
+procedure TApplication_PSHelper.HANDLE_W(T: HWND); begin Self.HANDLE := T; end;
 procedure TApplication_PSHelper.UPDATEFORMATSETTINGS_R(var T: BOOLEAN); begin T := Self.UPDATEFORMATSETTINGS; end;
 procedure TApplication_PSHelper.UPDATEFORMATSETTINGS_W(T: BOOLEAN); begin Self.UPDATEFORMATSETTINGS := T; end;
 {$ENDIF}
@@ -382,11 +384,11 @@ begin
     RegisterPropertyHelper(@TApplication.ONDEACTIVATE_R, @TApplication.ONDEACTIVATE_W, 'OnDeactivate');
     RegisterPropertyHelper(@TApplication.ONMINIMIZE_R, @TApplication.ONMINIMIZE_W, 'OnMinimize');
     RegisterPropertyHelper(@TApplication.ONRESTORE_R, @TApplication.ONRESTORE_W, 'OnRestore');
-    RegisterPropertyHelper(@TApplication.DIALOGHANDLE_R, @TApplication.DIALOGHANDLE_W, 'DialogHandle');
-    RegisterMethod(@TApplication.CREATEHANDLE, 'CreateHandle');
     RegisterMethod(@TApplication.NORMALIZETOPMOSTS, 'NormalizeTopMosts');
     RegisterMethod(@TApplication.RESTORETOPMOSTS, 'RestoreTopMosts');
     {$IFNDEF CLX}
+    RegisterPropertyHelper(@TApplication.DIALOGHANDLE_R, @TApplication.DIALOGHANDLE_W, 'DialogHandle');
+    RegisterMethod(@TApplication.CREATEHANDLE, 'CreateHandle');
     RegisterPropertyHelper(@TApplication.HANDLE_R, @TApplication.HANDLE_W, 'Handle');
     RegisterPropertyHelper(@TApplication.UPDATEFORMATSETTINGS_R, @TApplication.UPDATEFORMATSETTINGS_W, 'UpdateFormatSettings');
     {$ENDIF}
@@ -416,16 +418,10 @@ begin
     RegisterMethod(@TApplication.HELPJUMP, 'HelpJump');
     {$ENDIF}
     {$ENDIF}
-//    RegisterMethod(@TApplication.HANDLEEXCEPTION, 'HandleException');
-//    RegisterMethod(@TApplication.HOOKMAINWINDOW, 'HookMainWindow');
-//    RegisterMethod(@TApplication.UNHOOKMAINWINDOW, 'UnhookMainWindow');
-
     RegisterMethod(@TApplication.HANDLEMESSAGE, 'HandleMessage');
     RegisterMethod(@TApplication.HIDEHINT, 'HideHint');
-    RegisterMethod(@TApplication.HINTMOUSEMESSAGE, 'HintMouseMessage');
     RegisterMethod(@TApplication.INITIALIZE, 'Initialize');
     RegisterMethod(@TApplication.RUN, 'Run');
-//    RegisterMethod(@TApplication.SHOWEXCEPTION, 'ShowException');
     RegisterPropertyHelper(@TApplication.HELPFILE_R, @TApplication.HELPFILE_W, 'HelpFile');
     RegisterPropertyHelper(@TApplication.HINTCOLOR_R, @TApplication.HINTCOLOR_W, 'HintColor');
     RegisterPropertyHelper(@TApplication.HINTPAUSE_R, @TApplication.HINTPAUSE_W, 'HintPause');
@@ -440,10 +436,10 @@ end;
 {$IFNDEF FPC}
 procedure TAPPLICATIONACTIVE_R(Self: TApplication; var T: BOOLEAN); begin T := Self.ACTIVE; end;
 {$IFNDEF CLX}
-procedure TAPPLICATIONDIALOGHANDLE_R(Self: TAPPLICATION; var T: Longint); begin T := Self.DIALOGHANDLE; end;
-procedure TAPPLICATIONDIALOGHANDLE_W(Self: TAPPLICATION; T: Longint); begin Self.DIALOGHANDLE := T; end;
-procedure TAPPLICATIONHANDLE_R(Self: TAPPLICATION; var T: Longint); begin T := Self.HANDLE; end;
-procedure TAPPLICATIONHANDLE_W(Self: TAPPLICATION; T: Longint); begin Self.HANDLE := T; end;
+procedure TAPPLICATIONDIALOGHANDLE_R(Self: TAPPLICATION; var T: HWND); begin T := Self.DIALOGHANDLE; end;
+procedure TAPPLICATIONDIALOGHANDLE_W(Self: TAPPLICATION; T: HWND); begin Self.DIALOGHANDLE := T; end;
+procedure TAPPLICATIONHANDLE_R(Self: TAPPLICATION; var T: HWND); begin T := Self.HANDLE; end;
+procedure TAPPLICATIONHANDLE_W(Self: TAPPLICATION; T: HWND); begin Self.HANDLE := T; end;
 procedure TAPPLICATIONUPDATEFORMATSETTINGS_R(Self: TAPPLICATION; var T: BOOLEAN); begin T := Self.UPDATEFORMATSETTINGS; end;
 procedure TAPPLICATIONUPDATEFORMATSETTINGS_W(Self: TAPPLICATION; T: BOOLEAN); begin Self.UPDATEFORMATSETTINGS := T; end;
 {$ENDIF}
@@ -506,11 +502,11 @@ begin
     RegisterPropertyHelper(@TAPPLICATIONONDEACTIVATE_R, @TAPPLICATIONONDEACTIVATE_W, 'OnDeactivate');
     RegisterPropertyHelper(@TAPPLICATIONONMINIMIZE_R, @TAPPLICATIONONMINIMIZE_W, 'OnMinimize');
     RegisterPropertyHelper(@TAPPLICATIONONRESTORE_R, @TAPPLICATIONONRESTORE_W, 'OnRestore');
-    RegisterPropertyHelper(@TAPPLICATIONDIALOGHANDLE_R, @TAPPLICATIONDIALOGHANDLE_W, 'DialogHandle');
-    RegisterMethod(@TAPPLICATION.CREATEHANDLE, 'CreateHandle');
     RegisterMethod(@TAPPLICATION.NORMALIZETOPMOSTS, 'NormalizeTopMosts');
     RegisterMethod(@TAPPLICATION.RESTORETOPMOSTS, 'RestoreTopMosts');
     {$IFNDEF CLX}
+    RegisterPropertyHelper(@TAPPLICATIONDIALOGHANDLE_R, @TAPPLICATIONDIALOGHANDLE_W, 'DialogHandle');
+    RegisterMethod(@TAPPLICATION.CREATEHANDLE, 'CreateHandle');
     RegisterPropertyHelper(@TAPPLICATIONHANDLE_R, @TAPPLICATIONHANDLE_W, 'Handle');
     RegisterPropertyHelper(@TAPPLICATIONUPDATEFORMATSETTINGS_R, @TAPPLICATIONUPDATEFORMATSETTINGS_W, 'UpdateFormatSettings');
     {$ENDIF}
@@ -540,16 +536,10 @@ begin
     RegisterMethod(@TAPPLICATION.HELPJUMP, 'HelpJump');
     {$ENDIF}
     {$ENDIF}
-//    RegisterMethod(@TAPPLICATION.HANDLEEXCEPTION, 'HandleException');
-//    RegisterMethod(@TAPPLICATION.HOOKMAINWINDOW, 'HookMainWindow');
-//    RegisterMethod(@TAPPLICATION.UNHOOKMAINWINDOW, 'UnhookMainWindow');
-
     RegisterMethod(@TAPPLICATION.HANDLEMESSAGE, 'HandleMessage');
     RegisterMethod(@TAPPLICATION.HIDEHINT, 'HideHint');
-    RegisterMethod(@TAPPLICATION.HINTMOUSEMESSAGE, 'HintMouseMessage');
     RegisterMethod(@TAPPLICATION.INITIALIZE, 'Initialize');
     RegisterMethod(@TAPPLICATION.RUN, 'Run');
-//    RegisterMethod(@TAPPLICATION.SHOWEXCEPTION, 'ShowException');
     RegisterPropertyHelper(@TAPPLICATIONHELPFILE_R, @TAPPLICATIONHELPFILE_W, 'HelpFile');
     RegisterPropertyHelper(@TAPPLICATIONHINTCOLOR_R, @TAPPLICATIONHINTCOLOR_W, 'HintColor');
     RegisterPropertyHelper(@TAPPLICATIONHINTPAUSE_R, @TAPPLICATIONHINTPAUSE_W, 'HintPause');

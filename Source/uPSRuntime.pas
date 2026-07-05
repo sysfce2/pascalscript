@@ -300,6 +300,13 @@ type
     VI: TPSVariant;
     Data: tbts64;
   end;
+
+  PPSVariantU64 = ^TPSVariantU64;
+
+  TPSVariantU64 = packed record
+    VI: TPSVariant;
+    Data: tbtu64;
+  end;
 {$ENDIF}
 
   PPSVariantAChar = ^TPSVariantAChar;
@@ -828,6 +835,7 @@ type
     function GetUInt(ItemNo: Longint): Cardinal;
 {$IFNDEF PS_NOINT64}
     function GetInt64(ItemNo: Longint): Int64;
+    function GetUInt64(ItemNo: Longint): UInt64;
 {$ENDIF}
     function GetString(ItemNo: Longint): string; // calls the native method
     function GetAnsiString(ItemNo: Longint): tbtstring;
@@ -844,6 +852,7 @@ type
     procedure SetUInt(ItemNo: Longint; const Data: Cardinal);
 {$IFNDEF PS_NOINT64}
     procedure SetInt64(ItemNo: Longint; const Data: Int64);
+    procedure SetUInt64(ItemNo: Longint; const Data: UInt64);
 {$ENDIF}
     procedure SetString(ItemNo: Longint; const Data: string);
     procedure SetAnsiString(ItemNo: Longint; const Data: tbtstring);
@@ -855,10 +864,15 @@ type
     procedure SetCurrency(ItemNo: Longint; const Data: Currency);
     procedure SetBool(ItemNo: Longint; const Data: Boolean);
     procedure SetClass(ItemNo: Longint; const Data: TObject);
-
+{$WARNINGS OFF}
+{ ^ TPSStack has *two* Items properties: one indexed with a Cardinal (defined by TPSList) and the
+    one below indexed with a Longint. Delphi 12.3 or 12.2 introduced a warning about this. Disable
+    this warning since fixing the issue breaks callers: the return types of the two properties are
+    different (Pointer vs PPSVariant). There's a specific directive to turn off this warning as well
+    ($WARN OVERLOADING_ARRAY_PROPERTY OFF) but Delphi 12.1 doesnt know about it, so using it is hard. }
     property Items[I: Longint]: PPSVariant read GetItem; default;
   end;
-
+{$WARNINGS ON}
 
 function PSErrorToString(x: TPSError; const Param: tbtstring): tbtstring;
 function TIFErrorToString(x: TPSError; const Param: tbtstring): tbtstring;
@@ -874,6 +888,8 @@ const
 
 function PIFVariantToVariant(Src: PIFVariant; var Dest: Variant): Boolean;
 function VariantToPIFVariant(Exec: TPSExec; const Src: Variant; Dest: PIFVariant): Boolean;
+function ParamAsVariable(const Modifier: tbtchar; aType: TPSTypeRec): Boolean;
+function ResultAsRegister(b: TPSTypeRec): Boolean;
 
 function PSGetRecField(const avar: TPSVariantIFC; Fieldno: Longint): TPSVariantIFC;
 function PSGetArrayField(const avar: TPSVariantIFC; Fieldno: Longint): TPSVariantIFC;
@@ -892,6 +908,7 @@ function PSGetObject(Src: Pointer; aType: TPSTypeRec): TObject;
 function PSGetUInt(Src: Pointer; aType: TPSTypeRec): Cardinal;
 {$IFNDEF PS_NOINT64}
 function PSGetInt64(Src: Pointer; aType: TPSTypeRec): Int64;
+function PSGetUInt64(Src: Pointer; aType: TPSTypeRec): UInt64;
 {$ENDIF}
 function PSGetReal(Src: Pointer; aType: TPSTypeRec): Extended;
 function PSGetCurrency(Src: Pointer; aType: TPSTypeRec): Currency;
@@ -907,6 +924,7 @@ procedure PSSetObject(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; Const va
 procedure PSSetUInt(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: Cardinal);
 {$IFNDEF PS_NOINT64}
 procedure PSSetInt64(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: Int64);
+procedure PSSetUInt64(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: UInt64);
 {$ENDIF}
 procedure PSSetReal(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: Extended);
 procedure PSSetCurrency(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: Currency);
@@ -920,6 +938,7 @@ procedure PSSetUnicodeString(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; c
 
 procedure VNSetPointerTo(const Src: TPSVariantIFC; Data: Pointer; aType: TPSTypeRec);
 
+function VNGetObject(const Src: TPSVariantIFC): TObject;
 function VNGetUInt(const Src: TPSVariantIFC): Cardinal;
 {$IFNDEF PS_NOINT64}
 function VNGetInt64(const Src: TPSVariantIFC): Int64;
@@ -934,9 +953,11 @@ function VNGetWideString(const Src: TPSVariantIFC): tbtWideString;
 function VNGetUnicodeString(const Src: TPSVariantIFC): tbtunicodestring;
 {$ENDIF}
 
+procedure VNSetObject(const Src: TPSVariantIFC; const Val: TObject);
 procedure VNSetUInt(const Src: TPSVariantIFC; const Val: Cardinal);
 {$IFNDEF PS_NOINT64}
 procedure VNSetInt64(const Src: TPSVariantIFC; const Val: Int64);
+procedure VNSetUInt64(const Src: TPSVariantIFC; const Val: UInt64);
 {$ENDIF}
 procedure VNSetReal(const Src: TPSVariantIFC; const Val: Extended);
 procedure VNSetCurrency(const Src: TPSVariantIFC; const Val: Currency);
@@ -1191,6 +1212,7 @@ type
     CurrProc: TPSInternalProcRec;
     BasePtr, StackSize: Cardinal;
     FinallyOffset, ExceptOffset, Finally2Offset, EndOfBlock: Cardinal;
+    ExitPoint: Cardinal;
     ExceptionData: TPSError;
     ExceptionObject: TObject;
     ExceptionParam: tbtString;
@@ -1547,6 +1569,9 @@ begin
       tkInteger: begin Result := IntToStr(GetOrdProp(Instance, pp)); exit; end;
       tkChar: begin Result := '#'+IntToStr(GetOrdProp(Instance, pp)); exit; end;
       tkEnumeration: begin Result := tbtstring(GetEnumName(pp^.PropType{$IFNDEF FPC}{$IFDEF DELPHI3UP}^{$ENDIF}{$ENDIF}, GetOrdProp(Instance, pp))); exit; end;
+      {$IFNDEF PS_NOINT64}
+      tkInt64: begin Result := IntToStr(GetInt64Prop(Instance, pp)); exit; end;
+     {$ENDIF}
       tkFloat: begin Result := FloatToStr(GetFloatProp(Instance, PP)); exit; end;
       tkString, tkLString: begin Result := ''''+tbtString(GetStrProp(Instance, PP))+''''; exit; end;
       tkSet: begin Result := '[Set]'; exit; end;
@@ -1584,6 +1609,7 @@ end;
 function PSVariantToString(const p: TPSVariantIFC; const ClassProperties: tbtString): tbtString;
 var
   i, n: Longint;
+  b: Boolean;
 begin
   if p.Dta = nil then
   begin
@@ -1621,9 +1647,10 @@ begin
     btS16: str(tbts16(p.dta^), Result);
     btU32: str(tbtu32(p.dta^), Result);
     btS32: str(tbts32(p.dta^), Result);
-    btSingle: str(tbtsingle(p.dta^), Result);
-    btDouble: str(tbtdouble(p.dta^), Result);
-    btExtended: str(tbtextended(p.dta^), Result);
+    btSingle: Result := FloatToStr(tbtsingle(p.dta^));
+    btDouble: Result := FloatToStr(tbtdouble(p.dta^));
+    btExtended: Result := FloatToStr(tbtextended(p.dta^));
+    btCurrency: Result := CurrToStr(tbtcurrency(p.dta^));
     btString: Result := makestring(tbtString(p.dta^));
     btPChar:
       begin
@@ -1638,7 +1665,10 @@ begin
     btWideString: Result := MakeWString(tbtwidestring(p.dta^));
     btUnicodeString: Result := MakeWString(tbtUnicodeString(p.dta^));
     {$ENDIF}
-    {$IFNDEF PS_NOINT64}btS64: str(tbts64(p.dta^), Result);{$ENDIF}
+    {$IFNDEF PS_NOINT64}
+    btS64: str(tbts64(p.dta^), Result);
+    btU64: str(tbtu64(p.dta^), Result);
+    {$ENDIF}
     btStaticArray, btArray:
       begin
         Result := '';
@@ -1650,6 +1680,20 @@ begin
           if Result <> '' then
             Result := Result + ', ';
           Result := Result + PSVariantToString(PSGetArrayField(p, i), '');
+        end;
+        Result := '[' + Result + ']';
+      end;
+    btSet:
+      begin
+        Result := '';
+        n := TPSTypeRec_Set(p.aType).aBitSize;
+        for i := 0 to n-1 do begin
+          Set_membership(i, PByteArray(p.Dta), b);
+          if b then begin
+            if Result <> '' then
+              Result := Result + ', ';
+            Result := Result + IntToStr(i+1);
+          end;
         end;
         Result := '[' + Result + ']';
       end;
@@ -1730,7 +1774,7 @@ begin
     btProcPtr: FRealSize := 3 * sizeof(Pointer);
     btCurrency: FrealSize := Sizeof(Currency);
     btPointer: FRealSize := 3 * sizeof(Pointer); // ptr, type, freewhendone
-    btDouble{$IFNDEF PS_NOINT64}, bts64{$ENDIF}: FrealSize := 8;
+    btDouble{$IFNDEF PS_NOINT64}, bts64, btU64{$ENDIF}: FrealSize := 8;
     btExtended: FrealSize := SizeOf(Extended);
     btReturnAddress: FrealSize := Sizeof(TBTReturnAddress);
   else
@@ -1797,12 +1841,12 @@ begin
       end;
     btProcPtr:
       begin
-        Longint(p^) := 0;
+        tbtu32(p^) := 0;
         Pointer(Pointer(IPointer(p)+PointerSize)^) := nil;
         Pointer(Pointer(IPointer(p)+(2*PointerSize))^) := nil;
       end;
     btCurrency: tbtCurrency(P^) := 0;
-    btDouble{$IFNDEF PS_NOINT64}, bts64{$ENDIF}: {$IFNDEF PS_NOINT64}tbtS64(P^) := 0{$ELSE}tbtdouble(p^) := 0 {$ENDIF};
+    btDouble{$IFNDEF PS_NOINT64}, bts64, btU64{$ENDIF}: {$IFNDEF PS_NOINT64}tbtS64(P^) := 0{$ELSE}tbtdouble(p^) := 0 {$ENDIF};
     btExtended: tbtExtended(p^) := 0;
     btVariant: Initialize(Variant(p^));
     btReturnAddress:; // there is no point in initializing a return address
@@ -1857,6 +1901,40 @@ type
     datas : pointer;
   end;
   PDynArrayRec = ^TDynArrayRec;
+
+{ True when the type is managed and needs reference counting or finalization,
+  so cannot simply be copied. Unlike NeedFinalization this looks inside records
+  and static arrays. Matches what Delphi/FPC considers managed, with btPointer as
+  an exception. btPointer has no native counterpart but it can own and destroy
+  the data it points to, see FinalizeVariant, so cannot simply be copied. }
+function IsManagedType(aType: TPSTypeRec): Boolean;
+var
+  t: TPSTypeRec;
+  i: Longint;
+begin
+  case aType.BaseType of
+    btString, {$IFNDEF PS_NOWIDESTRING} btUnicodeString, btWideString, {$ENDIF}
+    {$IFNDEF PS_NOINTERFACES} btInterface, {$ENDIF} btArray, btPointer, btVariant:
+      Result := True;
+    btRecord:
+      begin
+        for i := 0 to TPSTypeRec_Record(aType).FieldTypes.Count -1 do
+        begin
+          t := TPSTypeRec_Record(aType).FieldTypes[i];
+          if IsManagedType(t) then
+          begin
+            Result := True;
+            exit;
+          end;
+        end;
+        Result := False;
+      end;
+    btStaticArray:
+      Result := IsManagedType(TPSTypeRec_Array(aType).ArrayType);
+  else
+    Result := False;
+  end;
+end;
 
 procedure FinalizeVariant(p: Pointer; aType: TPSTypeRec);
 var
@@ -1929,7 +2007,7 @@ begin
           t := TPSTypeRec_Record(aType).FieldTypes[i];
           case t.BaseType of
             btString, {$IFNDEF PS_NOWIDESTRING}btUnicodeString, btWideString, {$ENDIF}{$IFNDEF PS_NOINTERFACES}btInterface, {$ENDIF}btArray, btStaticArray,
-            btRecord: FinalizeVariant(p, t);
+            btRecord, btPointer, btVariant: FinalizeVariant(p, t);
           end;
           p := Pointer(IPointer(p) + t.FrealSize);
         end;
@@ -1939,7 +2017,7 @@ begin
         t := TPSTypeRec_Array(aType).ArrayType;
         case t.BaseType of
           btString, {$IFNDEF PS_NOWIDESTRING}btUnicodeString, btWideString, {$ENDIF}{$IFNDEF PS_NOINTERFACES}btInterface, {$ENDIF}btArray, btStaticArray,
-          btRecord: ;
+          btRecord, btPointer, btVariant: ;
           else Exit;
         end;
         for i := 0 to TPSTypeRec_StaticArray(aType).Size -1 do
@@ -2359,67 +2437,37 @@ var
               if not read(PPSVariantSet(varp).Data, TPSTypeRec_Set(varp.FType).aByteSize) then
               begin
                 CMD_Err(erOutOfRange);
-
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
             end;
-          bts8, btchar, btU8: if not read(PPSVariantU8(VarP)^.data, 1) then
+          bts8, btchar, btU8: if not read(PPSVariantU8(VarP)^.data, SizeOf(tbtu8)) then
           begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
           bts16, {$IFNDEF PS_NOWIDESTRING}btwidechar,{$ENDIF} btU16: if not read(PPSVariantU16(Varp)^.Data, SizeOf(TbtU16)) then begin
               CMD_Err(ErOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
-          bts32, btU32:
+          bts32, btU32, btProcPtr: if not read(PPSVariantU32(VarP)^.Data, SizeOf(tbtu32)) then
             begin
-              if FCurrentPosition + 3 >= FDataLength then
-              begin
-                Cmd_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
-                Result := False;
-                exit;;
-              end;
-	      {$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
-              PPSVariantU32(varp)^.Data := unaligned(Cardinal((@FData^[FCurrentPosition])^));
-	      {$else}
-              PPSVariantU32(varp)^.Data := Cardinal((@FData^[FCurrentPosition])^);
-	      {$endif}
-              Inc(FCurrentPosition, 4);
-            end;
-          btProcPtr:
-            begin
-              if FCurrentPosition + 3 >= FDataLength then
-              begin
-                Cmd_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
-                Result := False;
-                exit;;
-              end;
-	      {$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
-              PPSVariantU32(varp)^.Data := unaligned(Cardinal((@FData^[FCurrentPosition])^));
-	      {$else}
-              PPSVariantU32(varp)^.Data := Cardinal((@FData^[FCurrentPosition])^);
-	      {$endif}
-              if PPSVariantU32(varp)^.Data = 0 then
-              begin
-                PPSVariantProcPtr(varp)^.Ptr := nil;
-                PPSVariantProcPtr(varp)^.Self := nil;
-              end;
-              Inc(FCurrentPosition, 4);
+              CMD_Err(erOutOfRange);
+              Result := False;
+              exit;
             end;
           {$IFNDEF PS_NOINT64}
           bts64: if not read(PPSVariantS64(VarP)^.Data, sizeof(tbts64)) then
             begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
+              Result := False;
+              exit;
+            end;
+          btU64: if not read(PPSVariantU64(VarP)^.Data, sizeof(tbtu64)) then
+            begin
+              CMD_Err(erOutOfRange);
               Result := False;
               exit;
             end;
@@ -2427,28 +2475,24 @@ var
           btSingle: if not read(PPSVariantSingle(VarP)^.Data, SizeOf(TbtSingle))
             then begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
           btDouble: if not read(PPSVariantDouble(varp)^.Data, SizeOf(TbtDouble))
             then begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
           btExtended: if not read(PPSVariantExtended(varp)^.Data, SizeOf(TbtExtended))
             then begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
-          btCurrency: if not read(PPSVariantExtended(varp)^.Data, SizeOf(tbtCurrency))
+          btCurrency: if not read(PPSVariantCurrency(varp)^.Data, SizeOf(tbtCurrency))
             then begin
               CMD_Err(erOutOfRange);
-              DestroyHeapVariant(VarP);
               Result := False;
               exit;
             end;
@@ -2457,15 +2501,12 @@ var
             if not read(NameLen, 4) then
             begin
                 Cmd_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
-              Inc(FCurrentPosition, 4);
               SetLength(PPSVariantAString(varp)^.Data, NameLen);
               if not read(PPSVariantAString(varp)^.Data[1], NameLen) then begin
                 CMD_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
@@ -2476,15 +2517,12 @@ var
               if not read(NameLen, 4) then
               begin
                 Cmd_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
-              Inc(FCurrentPosition, 4);
               SetLength(PPSVariantWString(varp).Data, NameLen);
               if not read(PPSVariantWString(varp).Data[1], NameLen*2) then begin
                 CMD_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
@@ -2494,15 +2532,12 @@ var
               if not read(NameLen, 4) then
               begin
                 Cmd_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
-              Inc(FCurrentPosition, 4);
               SetLength(PPSVariantUString(varp).Data, NameLen);
               if not read(PPSVariantUString(varp).Data[1], NameLen*2) then begin
                 CMD_Err(erOutOfRange);
-                DestroyHeapVariant(VarP);
                 Result := False;
                 exit;
               end;
@@ -2510,7 +2545,6 @@ var
           {$ENDIF}
         else begin
             CMD_Err(erInvalidType);
-            DestroyHeapVariant(VarP);
             Result := False;
             exit;
           end;
@@ -2587,7 +2621,7 @@ var
       end else
         fe := False;
       case currf.BaseType of
-        {$IFNDEF PS_NOINT64}bts64, {$ENDIF}
+        {$IFNDEF PS_NOINT64}bts64, btU64, {$ENDIF}
         btU8, btS8, btU16, btS16, btU32, btS32, btSingle, btDouble, btCurrency,
         btExtended, btString, btPointer, btPChar,
         btVariant, btChar{$IFNDEF PS_NOWIDESTRING}, btUnicodeString, btWideString, btWideChar{$ENDIF}: begin
@@ -3087,6 +3121,11 @@ begin
   end;
 end;
 
+function VNGetObject(const Src: TPSVariantIFC): TObject;
+begin
+  Result := PSGetObject(Src.Dta, Src.aType);
+end;
+
 function VNGetUInt(const Src: TPSVariantIFC): Cardinal;
 begin
   Result := PSGetUInt(Src.Dta, Src.aType);
@@ -3131,6 +3170,13 @@ begin
 end;
 {$ENDIF}
 
+procedure VNSetObject(const Src: TPSVariantIFC; const Val: TObject);
+var
+  Dummy: Boolean;
+begin
+  PSSetObject(Src.Dta, Src.aType, Dummy, Val);
+end;
+
 procedure VNSetUInt(const Src: TPSVariantIFC; const Val: Cardinal);
 var
   Dummy: Boolean;
@@ -3144,6 +3190,13 @@ var
   Dummy: Boolean;
 begin
   PSSetInt64(Src.Dta, Src.aType, Dummy, Val);
+end;
+
+procedure VNSetUInt64(const Src: TPSVariantIFC; const Val: UInt64);
+var
+  Dummy: Boolean;
+begin
+  PSSetUInt64(Src.Dta, Src.aType, Dummy, Val);
 end;
 {$ENDIF}
 
@@ -3391,7 +3444,9 @@ begin
     btS16: Result := tbts16(src^);
     btU32: Result := tbtu32(src^);
     btS32: Result := tbts32(src^);
-{$IFNDEF PS_NOINT64}    btS64: Result := tbts64(src^);
+  {$IFNDEF PS_NOINT64}
+    btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
 {$ENDIF}
     btChar: Result := Ord(tbtchar(Src^));
 {$IFNDEF PS_NOWIDESTRING}    btWideChar: Result := Ord(tbtwidechar(Src^));{$ENDIF}
@@ -3462,6 +3517,35 @@ begin
     btU32: Result := tbtu32(src^);
     btS32: Result := tbts32(src^);
     btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
+    btChar: Result := Ord(tbtchar(Src^));
+{$IFNDEF PS_NOWIDESTRING}
+    btWideChar: Result := Ord(tbtwidechar(Src^));
+{$ENDIF}
+{$IFDEF DELPHI6UP}
+    btVariant:   Result := Variant(src^);
+{$ENDIF}
+    else raise Exception.Create(RPS_TypeMismatch);
+  end;
+end;
+
+function PSGetUInt64(Src: Pointer; aType: TPSTypeRec): UInt64;
+begin
+  if aType.BaseType = btPointer then
+  begin
+    atype := PIFTypeRec(Pointer(IPointer(Src)+PointerSize)^);
+    Src := Pointer(Src^);
+    if (src = nil) or (aType = nil) then raise Exception.Create(RPS_TypeMismatch);
+  end;
+  case aType.BaseType of
+    btU8: Result := tbtu8(src^);
+    btS8: Result := tbts8(src^);
+    btU16: Result := tbtu16(src^);
+    btS16: Result := tbts16(src^);
+    btU32: Result := tbtu32(src^);
+    btS32: Result := tbts32(src^);
+    btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
     btChar: Result := Ord(tbtchar(Src^));
 {$IFNDEF PS_NOWIDESTRING}
     btWideChar: Result := Ord(tbtwidechar(Src^));
@@ -3489,7 +3573,10 @@ begin
     btS16: Result := tbts16(src^);
     btU32: Result := tbtu32(src^);
     btS32: Result := tbts32(src^);
-{$IFNDEF PS_NOINT64}    btS64: Result := tbts64(src^);{$ENDIF}
+{$IFNDEF PS_NOINT64}
+    btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
+{$ENDIF}
     btSingle: Result := tbtsingle(Src^);
     btDouble: Result := tbtdouble(Src^);
     btExtended: Result := tbtextended(Src^);
@@ -3514,7 +3601,10 @@ begin
     btS16: Result := tbts16(src^);
     btU32: Result := tbtu32(src^);
     btS32: Result := tbts32(src^);
-{$IFNDEF PS_NOINT64} btS64: Result := tbts64(src^);{$ENDIF}
+  {$IFNDEF PS_NOINT64}
+    btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
+  {$ENDIF}
     btSingle: Result := tbtsingle(Src^);
     btDouble: Result := tbtdouble(Src^);
     btExtended: Result := tbtextended(Src^);
@@ -3540,7 +3630,10 @@ begin
     btS16: Result := tbts16(src^);
     btU32: Result := tbtu32(src^);
     btS32: Result := tbts32(src^);
-{$IFNDEF PS_NOINT64} btS64: Result := tbts64(src^);{$ENDIF}
+{$IFNDEF PS_NOINT64}
+    btS64: Result := tbts64(src^);
+    btU64: Result := tbtu64(src^);
+{$ENDIF}
     btChar: Result := Ord(tbtchar(Src^));
 {$IFNDEF PS_NOWIDESTRING}    btWideChar: Result := Ord(tbtwidechar(Src^));{$ENDIF}
     btVariant: Result := Variant(src^);
@@ -3647,7 +3740,10 @@ begin
       end;
     btU32: tbtu32(src^) := Val;
     btS32: tbts32(src^) := Val;
-{$IFNDEF PS_NOINT64}    btS64: tbts64(src^) := Val;{$ENDIF}
+{$IFNDEF PS_NOINT64}
+    btS64: tbts64(src^) := Val;
+    btU64: tbtu64(src^) := Val;
+{$ENDIF}
     btChar: tbtchar(Src^) := tbtChar(Val);
 {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtwidechar(Src^) := tbtwidechar(Val);{$ENDIF}
     btSingle: tbtSingle(src^) := Val;
@@ -3684,6 +3780,7 @@ begin
     btU32: tbtu32(src^) := Val;
     btS32: tbts32(src^) := Val;
     btS64: tbts64(src^) := Val;
+    btU64: tbtu64(src^) := Val;
     btChar: tbtchar(Src^) := tbtChar(Val);
 {$IFNDEF PS_NOWIDESTRING}
     btWideChar: tbtwidechar(Src^) := tbtwidechar(Val);
@@ -3705,6 +3802,47 @@ begin
     else ok := false;
   end;
 end;
+
+procedure PSSetUInt64(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: UInt64);
+begin
+  if (Src = nil) or (aType = nil) then begin Ok := false; exit; end;
+  if aType.BaseType = btPointer then
+  begin
+    aType := PIFTypeRec(Pointer(IPointer(Src)+PointerSize)^);
+    Src := Pointer(Src^);
+    if (Src = nil) or (aType = nil) then begin Ok := false; exit; end;
+  end;
+  case aType.BaseType of
+    btU8: tbtu8(Src^) := Val;
+    btS8: tbts8(Src^) := Val;
+    btU16: tbtu16(Src^) := Val;
+    btS16: tbts16(Src^) := Val;
+    btU32: tbtu32(Src^) := Val;
+    btS32: tbts32(Src^) := Val;
+    btS64: tbts64(Src^) := Val;
+    btU64: tbtu64(Src^) := Val;
+    btChar: tbtchar(Src^) := tbtChar(Val);
+{$IFNDEF PS_NOWIDESTRING}
+    btWideChar: tbtwidechar(Src^) := tbtwidechar(Val);
+{$ENDIF}
+    btSingle: tbtSingle(Src^) := Val;
+    btDouble: tbtDouble(Src^) := Val;
+    btCurrency: tbtCurrency(Src^) := Val;
+    btExtended: tbtExtended(Src^) := Val;
+{$IFDEF DELPHI6UP}
+    btVariant:
+      begin
+        try
+          Variant(Src^) := Val;
+        except
+          Ok := false;
+        end;
+      end;
+{$ENDIF}
+    else Ok := false;
+  end;
+end;
+
 {$ENDIF}
 
 procedure PSSetReal(Src: Pointer; aType: TPSTypeRec; var Ok: Boolean; const Val: Extended);
@@ -3781,7 +3919,10 @@ begin
       end;
     btU32: tbtu32(src^) := Val;
     btS32: tbts32(src^) := Val;
-{$IFNDEF PS_NOINT64}    btS64: tbts64(src^) := Val;{$ENDIF}
+{$IFNDEF PS_NOINT64}
+    btS64: tbts64(src^) := Val;
+    btU64: tbtu64(src^) := Val;
+{$ENDIF}
     btChar: tbtchar(Src^) := tbtChar(Val);
 {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtwidechar(Src^) := tbtwidechar(Val);{$ENDIF}
     btSingle: tbtSingle(src^) := Val;
@@ -3867,6 +4008,8 @@ begin
     if (src = nil) or (aType = nil) then begin Ok := false; exit; end;
   end;
   case aType.BaseType of
+    btChar: if val <> '' then tbtchar(src^) := tbtChar(val[1]);
+    btWideChar: if val <> '' then tbtwidechar(src^) := val[1];
     btString: tbtstring(src^) := tbtString(val);
     btWideString: tbtwidestring(src^) := val;
     btUnicodeString: tbtunicodestring(src^) := val;
@@ -3919,7 +4062,7 @@ begin
   for i := 0 to aType.FieldTypes.Count -1 do
   begin
     o := Longint(atype.RealFieldOffsets[i]);
-    CopyArrayContents(Pointer(IPointer(Dest)+Cardinal(o)), Pointer(IPointer(Src)+Cardinal(o)), 1, aType.FieldTypes[i]);
+    if not CopyArrayContents(Pointer(IPointer(Dest)+Cardinal(o)), Pointer(IPointer(Src)+Cardinal(o)), 1, aType.FieldTypes[i]) then begin result := false; exit; end;
   end;
   Result := true;
 end;
@@ -4006,7 +4149,15 @@ begin
           tbts64(Dest^) := tbts64(Src^);
           Dest := Pointer(IPointer(Dest) + 8);
           Src := Pointer(IPointer(Src) + 8);
-        end;{$ENDIF}
+        end;
+      btU64:
+        for i := 0 to Len -1 do
+        begin
+          tbtu64(Dest^) := tbtu64(Src^);
+          Dest := Pointer(IPointer(Dest) + 8);
+          Src := Pointer(IPointer(Src) + 8);
+        end;
+      {$ENDIF}
       btExtended:
         for i := 0 to Len -1 do
         begin
@@ -4395,11 +4546,13 @@ begin
           case srctype.BaseType of
             btu32:
               begin
-                Pointer(Dest^) := Pointer(Src^);
+                tbtu32(Dest^) := tbtu32(Src^);
+                Pointer(Pointer(IPointer(Dest)+PointerSize)^) := nil;
+                Pointer(Pointer(IPointer(Dest)+PointerSize2)^) := nil;
               end;
             btProcPtr:
               begin
-                Pointer(Dest^) := Pointer(Src^);
+                tbtu32(Dest^) := tbtu32(Src^);
                 Pointer(Pointer(IPointer(Dest)+PointerSize)^) := Pointer(Pointer(IPointer(Src)+PointerSize)^);
                 Pointer(Pointer(IPointer(Dest)+PointerSize2)^) := Pointer(Pointer(IPointer(Src)+PointerSize2)^);
               end;
@@ -4421,10 +4574,17 @@ begin
             btS16: tbtu32(Dest^) := tbts16(src^);
             btU32: tbtu32(Dest^) := tbtu32(src^);
             btS32: tbtu32(Dest^) := tbts32(src^);
-        {$IFNDEF PS_NOINT64} btS64: tbtu32(Dest^) := tbts64(src^);{$ENDIF}
+          {$IFNDEF PS_NOINT64}
+            btS64: tbtu32(Dest^) := tbts64(src^);
+            btU64: tbtu32(Dest^) := tbtu64(src^);
+          {$ENDIF}
             btChar: tbtu32(Dest^) := Ord(tbtchar(Src^));
         {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtu32(Dest^) := Ord(tbtwidechar(Src^));{$ENDIF}
             btVariant: tbtu32(Dest^) := Variant(src^);
+            {$IFNDEF CPU64}
+            // see below
+            btClass: tbtu32(Dest^) := tbtu32(src^);
+            {$ENDIF}
             else raise Exception.Create(RPS_TypeMismatch);
           end;
         end;
@@ -4443,18 +4603,76 @@ begin
             btS16: tbts32(Dest^) := tbts16(src^);
             btU32: tbts32(Dest^) := tbtu32(src^);
             btS32: tbts32(Dest^) := tbts32(src^);
-        {$IFNDEF PS_NOINT64} btS64: tbts32(Dest^) := tbts64(src^);{$ENDIF}
+          {$IFNDEF PS_NOINT64}
+            btS64: tbts32(Dest^) := tbts64(src^);
+            btU64: tbts32(Dest^) := tbtu64(src^);
+          {$ENDIF}
             btChar: tbts32(Dest^) := Ord(tbtchar(Src^));
         {$IFNDEF PS_NOWIDESTRING}  btWideChar: tbts32(Dest^) := Ord(tbtwidechar(Src^));{$ENDIF}
             btVariant: tbts32(Dest^) := Variant(src^);
+            {$IFNDEF CPU64}
             // nx change start - allow assignment of class
-            btClass: tbtu32(Dest^) := tbtu32(src^);
-            // nx change start
+            btClass: tbts32(Dest^) := tbts32(src^);
+            // nx change end
+            {$ENDIF}
             else raise Exception.Create(RPS_TypeMismatch);
           end;
         end;
       {$IFNDEF PS_NOINT64}
-      btS64: tbts64(Dest^) := PSGetInt64(Src, srctype);
+      btS64:
+        begin
+          if srctype.BaseType = btPointer then
+          begin
+            srctype := PIFTypeRec(Pointer(IPointer(Src)+PointerSize)^);
+            Src := Pointer(Src^);
+            if (src = nil) or (srctype = nil) then raise Exception.Create(RPS_TypeMismatch);
+          end;
+          case srctype.BaseType of
+            btU8: tbts64(Dest^) := tbtu8(src^);
+            btS8: tbts64(Dest^) := tbts8(src^);
+            btU16: tbts64(Dest^) := tbtu16(src^);
+            btS16: tbts64(Dest^) := tbts16(src^);
+            btU32: tbts64(Dest^) := tbtu32(src^);
+            btS32: tbts64(Dest^) := tbts32(src^);
+            btS64: tbts64(Dest^) := tbts64(src^);
+            btU64: tbts64(Dest^) := tbtu64(src^);
+            btChar: tbts64(Dest^) := Ord(tbtchar(Src^));
+        {$IFNDEF PS_NOWIDESTRING}  btWideChar: tbts64(Dest^) := Ord(tbtwidechar(Src^));{$ENDIF}
+            btVariant: tbts64(Dest^) := Variant(src^);
+            {$IFDEF CPU64}
+            // see above
+            btClass: tbts64(Dest^) := tbtu64(src^);
+            {$ENDIF}
+            else raise Exception.Create(RPS_TypeMismatch);
+          end;
+        end;
+      btU64:
+        begin
+          if srctype.BaseType = btPointer then
+          begin
+            srctype := PIFTypeRec(Pointer(IPointer(Src)+PointerSize)^);
+            Src := Pointer(Src^);
+            if (src = nil) or (srctype = nil) then raise Exception.Create(RPS_TypeMismatch);
+          end;
+          case srctype.BaseType of
+            btU8: tbtu64(Dest^) := tbtu8(src^);
+            btS8: tbtu64(Dest^) := tbts8(src^);
+            btU16: tbtu64(Dest^) := tbtu16(src^);
+            btS16: tbtu64(Dest^) := tbts16(src^);
+            btU32: tbtu64(Dest^) := tbtu32(src^);
+            btS32: tbtu64(Dest^) := tbts32(src^);
+            btS64: tbtu64(Dest^) := tbts64(src^);
+            btU64: tbtu64(Dest^) := tbtu64(src^);
+            btChar: tbtu64(Dest^) := Ord(tbtchar(Src^));
+        {$IFNDEF PS_NOWIDESTRING}  btWideChar: tbtu64(Dest^) := Ord(tbtwidechar(Src^));{$ENDIF}
+            btVariant: tbtu64(Dest^) := Variant(src^);
+            {$IFDEF CPU64}
+            // see above
+            btClass: tbtu64(Dest^) := tbtu64(src^);
+            {$ENDIF}
+            else raise Exception.Create(RPS_TypeMismatch);
+          end;
+        end;
       {$ENDIF}
       btSingle:
         begin
@@ -4471,7 +4689,10 @@ begin
             btS16: tbtsingle(Dest^) := tbts16(src^);
             btU32: tbtsingle(Dest^) := tbtu32(src^);
             btS32: tbtsingle(Dest^) := tbts32(src^);
-        {$IFNDEF PS_NOINT64}    btS64: tbtsingle(Dest^) := tbts64(src^);{$ENDIF}
+          {$IFNDEF PS_NOINT64}
+            btS64: tbtsingle(Dest^) := tbts64(src^);
+            btU64: tbtsingle(Dest^) := tbtu64(src^);
+          {$ENDIF}
             btSingle: tbtsingle(Dest^) := tbtsingle(Src^);
             btDouble: tbtsingle(Dest^) := tbtdouble(Src^);
             btExtended: tbtsingle(Dest^) := tbtextended(Src^);
@@ -4495,7 +4716,10 @@ begin
             btS16: tbtdouble(Dest^) := tbts16(src^);
             btU32: tbtdouble(Dest^) := tbtu32(src^);
             btS32: tbtdouble(Dest^) := tbts32(src^);
-        {$IFNDEF PS_NOINT64}    btS64: tbtdouble(Dest^) := tbts64(src^);{$ENDIF}
+          {$IFNDEF PS_NOINT64}
+            btS64: tbtdouble(Dest^) := tbts64(src^);
+            btU64: tbtdouble(Dest^) := tbtu64(src^);
+          {$ENDIF}
             btSingle: tbtdouble(Dest^) := tbtsingle(Src^);
             btDouble: tbtdouble(Dest^) := tbtdouble(Src^);
             btExtended: tbtdouble(Dest^) := tbtextended(Src^);
@@ -4520,7 +4744,10 @@ begin
             btS16: tbtextended(Dest^) := tbts16(src^);
             btU32: tbtextended(Dest^) := tbtu32(src^);
             btS32: tbtextended(Dest^) := tbts32(src^);
-        {$IFNDEF PS_NOINT64}    btS64: tbtextended(Dest^) := tbts64(src^);{$ENDIF}
+          {$IFNDEF PS_NOINT64}
+            btS64: tbtextended(Dest^) := tbts64(src^);
+            btU64: tbtextended(Dest^) := tbtu64(src^);
+          {$ENDIF}
             btSingle: tbtextended(Dest^) := tbtsingle(Src^);
             btDouble: tbtextended(Dest^) := tbtdouble(Src^);
             btExtended: tbtextended(Dest^) := tbtextended(Src^);
@@ -4555,7 +4782,12 @@ begin
           end else if (srctype.BaseType = btvariant) and VarIsArray(Variant(src^)) then
             Result := CreateArrayFromVariant(Self, dest, Variant(src^), desttype)
           else if (desttype <> srctype) and not ((desttype.BaseType = btarray) and (srctype.BaseType = btArray)
-            and (TPSTypeRec_Array(desttype).ArrayType = TPSTypeRec_Array(srctype).ArrayType)) then
+            and ((TPSTypeRec_Array(desttype).ArrayType.BaseType = TPSTypeRec_Array(srctype).ArrayType.BaseType) and
+                 not (TPSTypeRec_Array(desttype).ArrayType.BaseType in [btRecord, btSet, btStaticArray, btArray]))) then
+            { ^ Comparing BaseType is needed because the compiler doesn't merge open array types
+              and regular array types in ReadType (see the '!' check). Still it considers them
+              compatible in IsCompatibleType, so we should check ArrayType.BaseType instead of
+              only ArrayType. CopyArrayContents also doesn't require exact ArrayType match. }
             Result := False
           else
             CopyArrayContents(dest, src, 1, desttype);
@@ -4599,8 +4831,8 @@ begin
             TbtU32(Dest^) := Variant(Src^)
           else
           // nx change start
-          if (srctype.BaseType in [btS32, btU32]) then
-            TbtU32(Dest^) := TbtU32(Src^)
+          if (srctype.BaseType in {$IFDEF CPU64} [btU64, btS64] {$ELSE} [btU32, btS32] {$ENDIF}) then
+            {$IFDEF CPU64} TbtU64(Dest^) := TbtU64(Src^) {$ELSE} TbtU32(Dest^) := TbtU32(Src^) {$ENDIF}
           else
           // nx change end
             Result := False;
@@ -4768,6 +5000,10 @@ var
       btS16: tbts16(Into^) := Longint(b);
       btU32: tbtu32(Into^) := Cardinal(b);
       btS32: tbts32(Into^) := Longint(b);
+      {$IFNDEF PS_NOINT64}
+        btS64: tbts64(Into^) := Longint(b);
+        btU64: tbtu64(Into^) := Cardinal(b);
+      {$ENDIF}
       btVariant: Variant(Into^) := b;
     else begin
         CMD_Err(ErTypeMismatch);
@@ -4808,7 +5044,11 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) >= tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) >= tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) >= tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) >= tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) >= tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) >= tbts64(Var2^);
+                    btU64: b := tbts32(var1^) >= tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) >= Ord(tbtchar(Var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) >= Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) >= Variant(Var2^);
@@ -4821,6 +5061,7 @@ begin
             btExtended: b := tbtextended(var1^) >= PSGetReal(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) >= PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) >= PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btPChar,btString: b := tbtstring(var1^) >= PSGetAnsiString(Var2, var2type);
             btChar: b := tbtchar(var1^) >= PSGetAnsiString(Var2, var2type);
@@ -4884,7 +5125,11 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) <= tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) <= tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) <= tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) <= tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) <= tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) <= tbts64(Var2^);
+                    btU64: b := tbts32(var1^) <= tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) <= Ord(tbtchar(Var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) <= Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) <= Variant(Var2^);
@@ -4896,6 +5141,7 @@ begin
             btExtended: b := tbtextended(var1^) <= PSGetReal(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) <= PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) <= PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btPChar,btString: b := tbtstring(var1^) <= PSGetAnsiString(Var2, var2type);
             btChar: b := tbtchar(var1^) <= PSGetAnsiString(Var2, var2type);
@@ -4959,9 +5205,13 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) > tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) > tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) > tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) > tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) > tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) > tbts64(Var2^);
+                    btU64: b := tbts32(var1^) > tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) > Ord(tbtchar(Var2^));
-              {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) = Ord(tbtwidechar(Var2^));{$ENDIF}
+              {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) > Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) > Variant(Var2^);
                   else raise Exception.Create(RPS_TypeMismatch);
                 end;
@@ -4971,6 +5221,7 @@ begin
             btCurrency: b := tbtcurrency(var1^) > PSGetCurrency(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) > PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) > PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btPChar,btString: b := tbtstring(var1^) > PSGetAnsiString(Var2, var2type);
             btChar: b := tbtchar(var1^) > PSGetAnsiString(Var2, var2type);
@@ -5027,7 +5278,11 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) < tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) < tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) < tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) < tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) < tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) < tbts64(Var2^);
+                    btU64: b := tbts32(var1^) < tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) < Ord(tbtchar(Var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) < Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) < Variant(Var2^);
@@ -5039,6 +5294,7 @@ begin
             btExtended: b := tbtextended(var1^) < PSGetReal(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) < PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) < PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btPChar,btString: b := tbtstring(var1^) < PSGetAnsiString(Var2, var2type);
             btChar: b := tbtchar(var1^) < PSGetAnsiString(Var2, var2type);
@@ -5092,10 +5348,10 @@ begin
             btS16: b := tbts16(var1^) <> PSGetInt(Var2, var2type);
             btProcPtr:
               begin
-                if Pointer(Var1^) = Pointer(Var2^) then
+                if tbtu32(Var1^) = tbtu32(Var2^) then
                 begin
-                  if Longint(Var1^) = 0 then
-                    b := ((Pointer(Pointer(IPointer(Var1)+PointerSize2)^) <> Pointer(Pointer(IPointer(Var2)+PointerSize2)^)) or
+                  if tbtu32(Var1^) = 0 then { ProcNo is 0: external method ref, compare Self and Code }
+                    b := ((Pointer(Pointer(IPointer(Var1)+PointerSize)^) <> Pointer(Pointer(IPointer(Var2)+PointerSize)^)) or
                    (Pointer(Pointer(IPointer(Var1)+PointerSize2)^) <> Pointer(Pointer(IPointer(Var2)+PointerSize2)^)))
                   else
                     b := False;
@@ -5120,7 +5376,11 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) <> tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) <> tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) <> tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) <> tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) <> tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) <> tbts64(Var2^);
+                    btU64: b := tbts32(var1^) <> tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) <> Ord(tbtchar(Var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) <> Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) <> Variant(Var2^);
@@ -5133,6 +5393,7 @@ begin
             btPChar,btString: b := tbtstring(var1^) <> PSGetAnsiString(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) <> PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) <> PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btChar: b := tbtchar(var1^) <> PSGetAnsiString(Var2, var2type);
             {$IFNDEF PS_NOWIDESTRING}
@@ -5203,10 +5464,10 @@ begin
             btU32: b := tbtu32(var1^) = PSGetUInt(Var2, var2type);
             btProcPtr:
               begin
-                if Pointer(Var1^) = Pointer(Var2^) then
+                if tbtu32(Var1^) = tbtu32(Var2^) then
                 begin
-                  if Longint(Var1^) = 0 then
-                    b := ((Pointer(Pointer(IPointer(Var1)+PointerSize2)^) = Pointer(Pointer(IPointer(Var2)+PointerSize2)^)) and
+                  if tbtu32(Var1^) = 0 then { ProcNo is 0: external method ref, compare Self and Code }
+                    b := ((Pointer(Pointer(IPointer(Var1)+PointerSize)^) = Pointer(Pointer(IPointer(Var2)+PointerSize)^)) and
                    (Pointer(Pointer(IPointer(Var1)+PointerSize2)^) = Pointer(Pointer(IPointer(Var2)+PointerSize2)^)))
                   else
                     b := True;
@@ -5230,7 +5491,11 @@ begin
                   btDouble: b := PSGetReal(Var1, var1type) = tbtdouble(var2^);
                   btSingle: B := psGetReal(Var1, var1Type) = tbtsingle(var2^);
                   btExtended: B := psGetReal(Var1, var1Type) = tbtExtended(var2^);
-              {$IFNDEF PS_NOINT64} btS64: b := tbts32(var1^) = tbts64(Var2^);{$ENDIF}
+                  btCurrency: b := PSGetReal(Var1, var1type) = tbtcurrency(var2^);
+                  {$IFNDEF PS_NOINT64}
+                    btS64: b := tbts32(var1^) = tbts64(Var2^);
+                    btU64: b := tbts32(var1^) = tbtu64(Var2^);
+                  {$ENDIF}
                   btChar: b := tbts32(var1^) = Ord(tbtchar(Var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: b := tbts32(var1^) = Ord(tbtwidechar(Var2^));{$ENDIF}
                   btVariant: b := tbts32(var1^) = Variant(Var2^);
@@ -5243,6 +5508,7 @@ begin
             btPchar, btString: b := tbtstring(var1^) = PSGetAnsiString(Var2, var2type);
             {$IFNDEF PS_NOINT64}
             btS64: b := tbts64(var1^) = PSGetInt64(Var2, var2type);
+            btU64: b := tbtu64(var1^) = PSGetUInt64(Var2, var2type);
             {$ENDIF}
             btChar: b := tbtchar(var1^) = PSGetAnsiString(Var2, var2type);
             {$IFNDEF PS_NOWIDESTRING}
@@ -5427,7 +5693,10 @@ begin
                   btS16: tbtU32(var1^) := tbtU32(var1^) + cardinal(longint(tbts16(var2^)));
                   btU32: tbtU32(var1^) := tbtU32(var1^) + tbtu32(var2^);
                   btS32: tbtU32(var1^) := tbtU32(var1^) + cardinal(tbts32(var2^));
-              {$IFNDEF PS_NOINT64} btS64: tbtU32(var1^) := tbtU32(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtU32(var1^) := tbtU32(var1^) + tbts64(var2^);
+                    btU64: tbtU32(var1^) := tbtU32(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbtU32(var1^) := tbtU32(var1^) +  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtU32(var1^) := tbtU32(var1^) + Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbtU32(var1^) := tbtU32(var1^) + Variant(var2^);
@@ -5449,7 +5718,10 @@ begin
                   btS16: tbts32(var1^) := tbts32(var1^) + tbts16(var2^);
                   btU32: tbts32(var1^) := tbts32(var1^) + Longint(tbtu32(var2^));
                   btS32: tbts32(var1^) := tbts32(var1^) + tbts32(var2^);
-              {$IFNDEF PS_NOINT64} btS64: tbts32(var1^) := tbts32(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbts32(var1^) := tbts32(var1^) + tbts64(var2^);
+                    btU64: tbts32(var1^) := tbts32(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbts32(var1^) := tbts32(var1^) +  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbts32(var1^) := tbts32(var1^) + Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbts32(var1^) := tbts32(var1^) + Variant(var2^);
@@ -5458,6 +5730,7 @@ begin
               end;
            {$IFNDEF PS_NOINT64}
             btS64:  tbts64(var1^) := tbts64(var1^) + PSGetInt64(var2, var2type);
+            btU64:  tbtu64(var1^) := tbtu64(var1^) + PSGetUInt64(var2, var2type);
            {$ENDIF}
             btSingle:
               begin
@@ -5474,7 +5747,10 @@ begin
                   btS16: tbtsingle(var1^) := tbtsingle(var1^) + tbts16(var2^);
                   btU32: tbtsingle(var1^) := tbtsingle(var1^) + tbtu32(var2^);
                   btS32: tbtsingle(var1^) := tbtsingle(var1^) + tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtsingle(var1^) := tbtsingle(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtsingle(var1^) := tbtsingle(var1^) + tbts64(var2^);
+                    btU64: tbtsingle(var1^) := tbtsingle(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtsingle(var1^) := tbtsingle(var1^) + tbtsingle(var2^);
                   btDouble: tbtsingle(var1^) := tbtsingle(var1^) + tbtdouble(var2^);
                   btExtended: tbtsingle(var1^) := tbtsingle(var1^) + tbtextended(var2^);
@@ -5498,7 +5774,10 @@ begin
                   btS16: tbtdouble(var1^) := tbtdouble(var1^) + tbts16(var2^);
                   btU32: tbtdouble(var1^) := tbtdouble(var1^) + tbtu32(var2^);
                   btS32: tbtdouble(var1^) := tbtdouble(var1^) + tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtdouble(var1^) := tbtdouble(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtdouble(var1^) := tbtdouble(var1^) + tbts64(var2^);
+                    btU64: tbtdouble(var1^) := tbtdouble(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtdouble(var1^) := tbtdouble(var1^) + tbtsingle(var2^);
                   btDouble: tbtdouble(var1^) := tbtdouble(var1^) + tbtdouble(var2^);
                   btExtended: tbtdouble(var1^) := tbtdouble(var1^) + tbtextended(var2^);
@@ -5520,9 +5799,12 @@ begin
                   btS8: tbtcurrency(var1^) := tbtcurrency(var1^) + tbts8(var2^);
                   btU16: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtu16(var2^);
                   btS16: tbtcurrency(var1^) := tbtcurrency(var1^) + tbts16(var2^);
-                  btU32: tbtcurrency(var1^) := tbtdouble(var1^) + tbtu32(var2^);
+                  btU32: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtu32(var2^);
                   btS32: tbtcurrency(var1^) := tbtcurrency(var1^) + tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtcurrency(var1^) := tbtdouble(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtcurrency(var1^) := tbtcurrency(var1^) + tbts64(var2^);
+                    btU64: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtsingle(var2^);
                   btDouble: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtdouble(var2^);
                   btExtended: tbtcurrency(var1^) := tbtcurrency(var1^) + tbtextended(var2^);
@@ -5546,7 +5828,10 @@ begin
                   btS16: tbtextended(var1^) := tbtextended(var1^) + tbts16(var2^);
                   btU32: tbtextended(var1^) := tbtextended(var1^) + tbtu32(var2^);
                   btS32: tbtextended(var1^) := tbtextended(var1^) + tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtextended(var1^) := tbtextended(var1^) + tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtextended(var1^) := tbtextended(var1^) + tbts64(var2^);
+                    btU64: tbtextended(var1^) := tbtextended(var1^) + tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtextended(var1^) := tbtextended(var1^) + tbtsingle(var2^);
                   btDouble: tbtextended(var1^) := tbtextended(var1^) + tbtdouble(var2^);
                   btExtended: tbtextended(var1^) := tbtextended(var1^) + tbtextended(var2^);
@@ -5612,7 +5897,10 @@ begin
                   btS16: tbtU32(var1^) := tbtU32(var1^) - cardinal(longint(tbts16(var2^)));
                   btU32: tbtU32(var1^) := tbtU32(var1^) - tbtu32(var2^);
                   btS32: tbtU32(var1^) := tbtU32(var1^) - cardinal(tbts32(var2^));
-              {$IFNDEF PS_NOINT64} btS64: tbtU32(var1^) := tbtU32(var1^) - tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtU32(var1^) := tbtU32(var1^) - tbts64(var2^);
+                    btU64: tbtU32(var1^) := tbtU32(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbtU32(var1^) := tbtU32(var1^) -  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtU32(var1^) := tbtU32(var1^) - Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbtU32(var1^) := tbtU32(var1^) - Variant(var2^);
@@ -5634,7 +5922,10 @@ begin
                   btS16: tbts32(var1^) := tbts32(var1^) - tbts16(var2^);
                   btU32: tbts32(var1^) := tbts32(var1^) - Longint(tbtu32(var2^));
                   btS32: tbts32(var1^) := tbts32(var1^) - tbts32(var2^);
-              {$IFNDEF PS_NOINT64} btS64: tbts32(var1^) := tbts32(var1^) - tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbts32(var1^) := tbts32(var1^) - tbts64(var2^);
+                    btU64: tbts32(var1^) := tbts32(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbts32(var1^) := tbts32(var1^) -  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbts32(var1^) := tbts32(var1^) - Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbts32(var1^) := tbts32(var1^) - Variant(var2^);
@@ -5643,6 +5934,7 @@ begin
               end;
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) - PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) - PSGetUInt64(var2, var2type);
            {$ENDIF}
             btSingle:
               begin
@@ -5659,7 +5951,10 @@ begin
                   btS16: tbtsingle(var1^) := tbtsingle(var1^) - tbts16(var2^);
                   btU32: tbtsingle(var1^) := tbtsingle(var1^) - tbtu32(var2^);
                   btS32: tbtsingle(var1^) := tbtsingle(var1^) - tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtsingle(var1^) := tbtsingle(var1^) - tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtsingle(var1^) := tbtsingle(var1^) - tbts64(var2^);
+                    btU64: tbtsingle(var1^) := tbtsingle(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtsingle(var1^) := tbtsingle(var1^) - tbtsingle(var2^);
                   btDouble: tbtsingle(var1^) := tbtsingle(var1^) - tbtdouble(var2^);
                   btExtended: tbtsingle(var1^) := tbtsingle(var1^) - tbtextended(var2^);
@@ -5681,9 +5976,12 @@ begin
                   btS8: tbtcurrency(var1^) := tbtcurrency(var1^) - tbts8(var2^);
                   btU16: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtu16(var2^);
                   btS16: tbtcurrency(var1^) := tbtcurrency(var1^) - tbts16(var2^);
-                  btU32: tbtcurrency(var1^) := tbtdouble(var1^) - tbtu32(var2^);
+                  btU32: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtu32(var2^);
                   btS32: tbtcurrency(var1^) := tbtcurrency(var1^) - tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtcurrency(var1^) := tbtdouble(var1^) - tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtcurrency(var1^) := tbtcurrency(var1^) - tbts64(var2^);
+                    btU64: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtsingle(var2^);
                   btDouble: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtdouble(var2^);
                   btExtended: tbtcurrency(var1^) := tbtcurrency(var1^) - tbtextended(var2^);
@@ -5707,7 +6005,10 @@ begin
                   btS16: tbtdouble(var1^) := tbtdouble(var1^) - tbts16(var2^);
                   btU32: tbtdouble(var1^) := tbtdouble(var1^) - tbtu32(var2^);
                   btS32: tbtdouble(var1^) := tbtdouble(var1^) - tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtdouble(var1^) := tbtdouble(var1^) - tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtdouble(var1^) := tbtdouble(var1^) - tbts64(var2^);
+                    btU64: tbtdouble(var1^) := tbtdouble(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtdouble(var1^) := tbtdouble(var1^) - tbtsingle(var2^);
                   btDouble: tbtdouble(var1^) := tbtdouble(var1^) - tbtdouble(var2^);
                   btExtended: tbtdouble(var1^) := tbtdouble(var1^) - tbtextended(var2^);
@@ -5731,7 +6032,10 @@ begin
                   btS16: tbtextended(var1^) := tbtextended(var1^) - tbts16(var2^);
                   btU32: tbtextended(var1^) := tbtextended(var1^) - tbtu32(var2^);
                   btS32: tbtextended(var1^) := tbtextended(var1^) - tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtextended(var1^) := tbtextended(var1^) -+tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtextended(var1^) := tbtextended(var1^) - tbts64(var2^);
+                    btU64: tbtextended(var1^) := tbtextended(var1^) - tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtextended(var1^) := tbtextended(var1^) - tbtsingle(var2^);
                   btDouble: tbtextended(var1^) := tbtextended(var1^) - tbtdouble(var2^);
                   btExtended: tbtextended(var1^) := tbtextended(var1^) - tbtextended(var2^);
@@ -5792,7 +6096,10 @@ begin
                   btS16: tbtU32(var1^) := tbtU32(var1^) * cardinal(longint(tbts16(var2^)));
                   btU32: tbtU32(var1^) := tbtU32(var1^) * tbtu32(var2^);
                   btS32: tbtU32(var1^) := tbtU32(var1^) * cardinal(tbts32(var2^));
-              {$IFNDEF PS_NOINT64} btS64: tbtU32(var1^) := tbtU32(var1^) * tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtU32(var1^) := tbtU32(var1^) * tbts64(var2^);
+                    btU64: tbtU32(var1^) := tbtU32(var1^) * tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbtU32(var1^) := tbtU32(var1^) *  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtU32(var1^) := tbtU32(var1^) * Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbtU32(var1^) := tbtU32(var1^) * Variant(var2^);
@@ -5814,7 +6121,10 @@ begin
                   btS16: tbts32(var1^) := tbts32(var1^) * tbts16(var2^);
                   btU32: tbts32(var1^) := tbts32(var1^) * Longint(tbtu32(var2^));
                   btS32: tbts32(var1^) := tbts32(var1^) * tbts32(var2^);
-              {$IFNDEF PS_NOINT64} btS64: tbts32(var1^) := tbts32(var1^) * tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbts32(var1^) := tbts32(var1^) * tbts64(var2^);
+                    btU64: tbts32(var1^) := tbts32(var1^) * tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbts32(var1^) := tbts32(var1^) *  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbts32(var1^) := tbts32(var1^) * Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbts32(var1^) := tbts32(var1^) * Variant(var2^);
@@ -5823,6 +6133,7 @@ begin
               end;
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) * PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) * PSGetUInt64(var2, var2type);
            {$ENDIF}
             btCurrency:
               begin
@@ -5837,9 +6148,12 @@ begin
                   btS8: tbtcurrency(var1^) := tbtcurrency(var1^) * tbts8(var2^);
                   btU16: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtu16(var2^);
                   btS16: tbtcurrency(var1^) := tbtcurrency(var1^) * tbts16(var2^);
-                  btU32: tbtcurrency(var1^) := tbtdouble(var1^) * tbtu32(var2^);
+                  btU32: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtu32(var2^);
                   btS32: tbtcurrency(var1^) := tbtcurrency(var1^) * tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtcurrency(var1^) := tbtdouble(var1^) * tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtcurrency(var1^) := tbtcurrency(var1^) * tbts64(var2^);
+                    btU64: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtsingle(var2^);
                   btDouble: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtdouble(var2^);
                   btExtended: tbtcurrency(var1^) := tbtcurrency(var1^) * tbtextended(var2^);
@@ -5863,7 +6177,10 @@ begin
                   btS16: tbtsingle(var1^) := tbtsingle(var1^) *tbts16(var2^);
                   btU32: tbtsingle(var1^) := tbtsingle(var1^) *tbtu32(var2^);
                   btS32: tbtsingle(var1^) := tbtsingle(var1^) *tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtsingle(var1^) := tbtsingle(var1^) *tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtsingle(var1^) := tbtsingle(var1^) *tbts64(var2^);
+                    btU64: tbtsingle(var1^) := tbtsingle(var1^) *tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtsingle(var1^) := tbtsingle(var1^) *tbtsingle(var2^);
                   btDouble: tbtsingle(var1^) := tbtsingle(var1^) *tbtdouble(var2^);
                   btExtended: tbtsingle(var1^) := tbtsingle(var1^) *tbtextended(var2^);
@@ -5887,7 +6204,10 @@ begin
                   btS16: tbtdouble(var1^) := tbtdouble(var1^) *tbts16(var2^);
                   btU32: tbtdouble(var1^) := tbtdouble(var1^) *tbtu32(var2^);
                   btS32: tbtdouble(var1^) := tbtdouble(var1^) *tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtdouble(var1^) := tbtdouble(var1^) *tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtdouble(var1^) := tbtdouble(var1^) *tbts64(var2^);
+                    btU64: tbtdouble(var1^) := tbtdouble(var1^) *tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtdouble(var1^) := tbtdouble(var1^) *tbtsingle(var2^);
                   btDouble: tbtdouble(var1^) := tbtdouble(var1^) *tbtdouble(var2^);
                   btExtended: tbtdouble(var1^) := tbtdouble(var1^) *tbtextended(var2^);
@@ -5911,7 +6231,10 @@ begin
                   btS16: tbtextended(var1^) := tbtextended(var1^) *tbts16(var2^);
                   btU32: tbtextended(var1^) := tbtextended(var1^) *tbtu32(var2^);
                   btS32: tbtextended(var1^) := tbtextended(var1^) *tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtextended(var1^) := tbtextended(var1^) *tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtextended(var1^) := tbtextended(var1^) *tbts64(var2^);
+                    btU64: tbtextended(var1^) := tbtextended(var1^) *tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtextended(var1^) := tbtextended(var1^) *tbtsingle(var2^);
                   btDouble: tbtextended(var1^) := tbtextended(var1^) *tbtdouble(var2^);
                   btExtended: tbtextended(var1^) := tbtextended(var1^) *tbtextended(var2^);
@@ -5968,7 +6291,10 @@ begin
                   btS16: tbtU32(var1^) := tbtU32(var1^) div cardinal(longint(tbts16(var2^)));
                   btU32: tbtU32(var1^) := tbtU32(var1^) div tbtu32(var2^);
                   btS32: tbtU32(var1^) := tbtU32(var1^) div cardinal(tbts32(var2^));
-              {$IFNDEF PS_NOINT64} btS64: tbtU32(var1^) := tbtU32(var1^) div tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtU32(var1^) := tbtU32(var1^) div tbts64(var2^);
+                    btU64: tbtU32(var1^) := tbtU32(var1^) div tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbtU32(var1^) := tbtU32(var1^) div  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtU32(var1^) := tbtU32(var1^) div Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbtU32(var1^) := tbtU32(var1^) div Variant(var2^);
@@ -5990,7 +6316,10 @@ begin
                   btS16: tbts32(var1^) := tbts32(var1^) div tbts16(var2^);
                   btU32: tbts32(var1^) := tbts32(var1^) div Longint(tbtu32(var2^));
                   btS32: tbts32(var1^) := tbts32(var1^) div tbts32(var2^);
-              {$IFNDEF PS_NOINT64} btS64: tbts32(var1^) := tbts32(var1^) div tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbts32(var1^) := tbts32(var1^) div tbts64(var2^);
+                    btU64: tbts32(var1^) := tbts32(var1^) div tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbts32(var1^) := tbts32(var1^) div  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbts32(var1^) := tbts32(var1^) div Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbts32(var1^) := tbts32(var1^) div Variant(var2^);
@@ -5999,6 +6328,7 @@ begin
               end;
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) div PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) div PSGetUInt64(var2, var2type);
            {$ENDIF}
             btSingle:
               begin
@@ -6015,7 +6345,10 @@ begin
                   btS16: tbtsingle(var1^) := tbtsingle(var1^) / tbts16(var2^);
                   btU32: tbtsingle(var1^) := tbtsingle(var1^) / tbtu32(var2^);
                   btS32: tbtsingle(var1^) := tbtsingle(var1^) / tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtsingle(var1^) := tbtsingle(var1^) / tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtsingle(var1^) := tbtsingle(var1^) / tbts64(var2^);
+                    btU64: tbtsingle(var1^) := tbtsingle(var1^) / tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtsingle(var1^) := tbtsingle(var1^) / tbtsingle(var2^);
                   btDouble: tbtsingle(var1^) := tbtsingle(var1^) / tbtdouble(var2^);
                   btExtended: tbtsingle(var1^) := tbtsingle(var1^) / tbtextended(var2^);
@@ -6037,9 +6370,12 @@ begin
                   btS8: tbtcurrency(var1^) := tbtcurrency(var1^) / tbts8(var2^);
                   btU16: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtu16(var2^);
                   btS16: tbtcurrency(var1^) := tbtcurrency(var1^) / tbts16(var2^);
-                  btU32: tbtcurrency(var1^) := tbtdouble(var1^) / tbtu32(var2^);
+                  btU32: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtu32(var2^);
                   btS32: tbtcurrency(var1^) := tbtcurrency(var1^) / tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtcurrency(var1^) := tbtdouble(var1^) / tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtcurrency(var1^) := tbtcurrency(var1^) / tbts64(var2^);
+                    btU64: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtsingle(var2^);
                   btDouble: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtdouble(var2^);
                   btExtended: tbtcurrency(var1^) := tbtcurrency(var1^) / tbtextended(var2^);
@@ -6063,7 +6399,10 @@ begin
                   btS16: tbtdouble(var1^) := tbtdouble(var1^) / tbts16(var2^);
                   btU32: tbtdouble(var1^) := tbtdouble(var1^) / tbtu32(var2^);
                   btS32: tbtdouble(var1^) := tbtdouble(var1^) / tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtdouble(var1^) := tbtdouble(var1^) / tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtdouble(var1^) := tbtdouble(var1^) / tbts64(var2^);
+                    btU64: tbtdouble(var1^) := tbtdouble(var1^) / tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtdouble(var1^) := tbtdouble(var1^) / tbtsingle(var2^);
                   btDouble: tbtdouble(var1^) := tbtdouble(var1^) / tbtdouble(var2^);
                   btExtended: tbtdouble(var1^) := tbtdouble(var1^) / tbtextended(var2^);
@@ -6087,7 +6426,10 @@ begin
                   btS16: tbtextended(var1^) := tbtextended(var1^) / tbts16(var2^);
                   btU32: tbtextended(var1^) := tbtextended(var1^) / tbtu32(var2^);
                   btS32: tbtextended(var1^) := tbtextended(var1^) / tbts32(var2^);
-              {$IFNDEF PS_NOINT64}    btS64: tbtextended(var1^) := tbtextended(var1^) / tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtextended(var1^) := tbtextended(var1^) / tbts64(var2^);
+                    btU64: tbtextended(var1^) := tbtextended(var1^) / tbtu64(var2^);
+                  {$ENDIF}
                   btSingle: tbtextended(var1^) := tbtextended(var1^) / tbtsingle(var2^);
                   btDouble: tbtextended(var1^) := tbtextended(var1^) / tbtdouble(var2^);
                   btExtended: tbtextended(var1^) := tbtextended(var1^) / tbtextended(var2^);
@@ -6142,7 +6484,10 @@ begin
                   btS16: tbtU32(var1^) := tbtU32(var1^) mod cardinal(longint(tbts16(var2^)));
                   btU32: tbtU32(var1^) := tbtU32(var1^) mod tbtu32(var2^);
                   btS32: tbtU32(var1^) := tbtU32(var1^) mod cardinal(tbts32(var2^));
-              {$IFNDEF PS_NOINT64} btS64: tbtU32(var1^) := tbtU32(var1^) mod tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbtU32(var1^) := tbtU32(var1^) mod tbts64(var2^);
+                    btU64: tbtU32(var1^) := tbtU32(var1^) mod tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbtU32(var1^) := tbtU32(var1^) mod  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbtU32(var1^) := tbtU32(var1^) mod Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbtU32(var1^) := tbtU32(var1^) mod Variant(var2^);
@@ -6164,7 +6509,10 @@ begin
                   btS16: tbts32(var1^) := tbts32(var1^) mod tbts16(var2^);
                   btU32: tbts32(var1^) := tbts32(var1^) mod Longint(tbtu32(var2^));
                   btS32: tbts32(var1^) := tbts32(var1^) mod tbts32(var2^);
-              {$IFNDEF PS_NOINT64} btS64: tbts32(var1^) := tbts32(var1^) mod tbts64(var2^);{$ENDIF}
+                  {$IFNDEF PS_NOINT64}
+                    btS64: tbts32(var1^) := tbts32(var1^) mod tbts64(var2^);
+                    btU64: tbts32(var1^) := tbts32(var1^) mod tbtu64(var2^);
+                  {$ENDIF}
                   btChar: tbts32(var1^) := tbts32(var1^) mod  Ord(tbtchar(var2^));
               {$IFNDEF PS_NOWIDESTRING}    btWideChar: tbts32(var1^) := tbts32(var1^) mod Ord(tbtwidechar(var2^));{$ENDIF}
                   btVariant: tbts32(var1^) := tbts32(var1^) mod Variant(var2^);
@@ -6173,6 +6521,7 @@ begin
               end;
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) mod PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) mod PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6202,6 +6551,7 @@ begin
             btS32: tbts32(var1^) := tbts32(var1^) shl PSGetInt(Var2, var2type);
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) shl PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) shl PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6231,6 +6581,7 @@ begin
             btS32: tbts32(var1^) := tbts32(var1^) shr PSGetInt(Var2, var2type);
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) shr PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) shr PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6260,6 +6611,7 @@ begin
             btS32: tbts32(var1^) := tbts32(var1^) and PSGetInt(Var2, var2type);
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) and PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) and PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6289,6 +6641,7 @@ begin
             btS32: tbts32(var1^) := tbts32(var1^) or PSGetInt(Var2, var2type);
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) or PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) or PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6318,6 +6671,7 @@ begin
             btS32: tbts32(var1^) := tbts32(var1^) xor PSGetInt(Var2, var2type);
            {$IFNDEF PS_NOINT64}
             btS64: tbts64(var1^) := tbts64(var1^) xor PSGetInt64(var2, var2type);
+            btU64: tbtu64(var1^) := tbtu64(var1^) xor PSGetUInt64(var2, var2type);
            {$ENDIF}
             btVariant:
               begin
@@ -6581,8 +6935,8 @@ begin
 	      {$else}
               tbtu32(dest.p^) := tbtu32((@FData^[FCurrentPosition])^);
 	      {$endif}
-              tbtu32(Pointer(IPointer(dest.p)+PointerSize)^) := 0;
-              tbtu32(Pointer(IPointer(dest.p)+PointerSize)^) := 0;
+              Pointer(Pointer(IPointer(dest.p)+PointerSize)^) := nil;
+              Pointer(Pointer(IPointer(dest.p)+PointerSize2)^) := nil;
               Inc(FCurrentPosition, 4);
             end;
           {$IFNDEF PS_NOINT64}
@@ -6599,6 +6953,22 @@ begin
               tbts64(dest.p^) := unaligned(tbts64((@FData^[FCurrentPosition])^));
 	      {$else}
               tbts64(dest.p^) := tbts64((@FData^[FCurrentPosition])^);
+	      {$endif}
+              Inc(FCurrentPosition, 8);
+            end;
+          btU64:
+            begin
+              if FCurrentPosition + 7>= FDataLength then
+              begin
+                CMD_Err(erOutOfRange);
+                FTempVars.Pop;
+                Result := False;
+                exit;
+              end;
+	      {$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
+              tbtu64(dest.p^) := unaligned(tbtu64((@FData^[FCurrentPosition])^));
+	      {$else}
+              tbtu64(dest.p^) := tbtu64((@FData^[FCurrentPosition])^);
 	      {$endif}
               Inc(FCurrentPosition, 8);
             end;
@@ -6652,6 +7022,22 @@ begin
 	      {$endif}
               Inc(FCurrentPosition, sizeof(Extended));
             end;
+          btCurrency:
+            begin
+              if FCurrentPosition + (SizeOf(Currency)-1)>= FDataLength then
+              begin
+                CMD_Err(erOutOfRange);
+                FTempVars.Pop;
+                Result := False;
+                exit;
+              end;
+	      {$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
+              tbtcurrency(dest.p^) := unaligned(tbtcurrency((@FData^[FCurrentPosition])^));
+	      {$else}
+              tbtcurrency(dest.p^) := tbtcurrency((@FData^[FCurrentPosition])^);
+	      {$endif}
+              Inc(FCurrentPosition, SizeOf(Currency));
+            end;
           btPchar, btString:
           begin
               if FCurrentPosition + 3 >= FDataLength then
@@ -6698,7 +7084,7 @@ begin
               Inc(FCurrentPosition, 4);
               Pointer(Dest.P^) := nil;
               SetLength(tbtwidestring(Dest.P^), Param);
-              if not ReadData(tbtwidestring(Dest.P^)[1], Param*2) then
+              if (Param <> 0) and not ReadData(tbtwidestring(Dest.P^)[1], Param*2) then
               begin
                 CMD_Err(erOutOfRange);
                 FTempVars.Pop;
@@ -6723,7 +7109,7 @@ begin
               Inc(FCurrentPosition, 4);
               Pointer(Dest.P^) := nil;
               SetLength(tbtUnicodestring(Dest.P^), Param);
-              if not ReadData(tbtUnicodestring(Dest.P^)[1], Param*2) then
+              if (Param <> 0) and not ReadData(tbtUnicodestring(Dest.P^)[1], Param*2) then
               begin
                 CMD_Err(erOutOfRange);
                 FTempVars.Pop;
@@ -6792,7 +7178,7 @@ begin
         case Dest.aType.BaseType of
           btRecord:
             begin
-              if Param > Cardinal(TPSTypeRec_Record(Dest.aType).FFieldTypes.Count) then
+              if Param >= Cardinal(TPSTypeRec_Record(Dest.aType).FFieldTypes.Count) then
               begin
                 CMD_Err(erOutOfRange);
                 Result := False;
@@ -6806,8 +7192,8 @@ begin
               if Param >= Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType)) then
               begin
                 CMD_Err2(erCustomError,
-                         tbtstring(Format('Out Of Range! Element index is out of Array range: Element Index is %d, Array length = %d',
-                                [Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType)),Param])));
+                         tbtstring(Format('Array index out of bounds (%d). Length is %d.',
+                                [Param, Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType))])));
                 Result := False;
                 exit;
               end;
@@ -6819,8 +7205,8 @@ begin
               if Param >= Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size) then
               begin
                 CMD_Err2(erCustomError,
-                         tbtstring(Format('Out Of Range! Element index is out of Array range: Element Index is %d, Array length = %d',
-                                [Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size),Param])));
+                         tbtstring(Format('Static array index out of bounds (%d). Length is %d.',
+                                [Param, Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size)])));
                 Result := False;
                 exit;
               end;
@@ -6881,6 +7267,12 @@ begin
         begin
           Dest.aType := PPSVariantData(Tmp).vi.FType;
           Dest.P := @PPSVariantData(Tmp).Data;
+        end;
+        if FCurrentPosition + 3 >= FDataLength then
+        begin
+          CMD_Err(erOutOfRange);
+          Result := False;
+          exit;
         end;
 	{$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
         Param := unaligned(Cardinal((@FData^[FCurrentPosition])^));
@@ -6948,7 +7340,7 @@ begin
         case Dest.aType.BaseType of
           btRecord:
             begin
-              if Param > Cardinal(TPSTypeRec_Record(Dest.aType).FFieldTypes.Count) then
+              if Param >= Cardinal(TPSTypeRec_Record(Dest.aType).FFieldTypes.Count) then
               begin
                 CMD_Err(erOutOfRange);
                 Result := False;
@@ -6962,8 +7354,8 @@ begin
               if Cardinal(Param) >= Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType)) then
               begin
                 CMD_Err2(erCustomError,
-                         tbtstring(Format('Out Of Range! Element index is out of Array range: Element Index is %d, Array length = %d',
-                                [Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType)),Param])));
+                         tbtstring(Format('Array index out of bounds (%d). Length is %d.',
+                                [Param, Cardinal(PSDynArrayGetLength(Pointer(Dest.P^), dest.aType))])));
                 Result := False;
                 exit;
               end;
@@ -6975,8 +7367,8 @@ begin
               if Param >= Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size) then
               begin
                 CMD_Err2(erCustomError,
-                         tbtstring(Format('Out Of Range! Element index is out of Array range: Element Index is %d, Array length = %d',
-                                [Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size),Param])));
+                         tbtstring(Format('Static array index out of bounds (%d). Length is %d.',
+                                [Param, Cardinal(TPSTypeRec_StaticArray(Dest.aType).Size)])));
                 Result := False;
                 exit;
               end;
@@ -7020,6 +7412,7 @@ begin
     btS32: tbts32(dta^) := -tbts32(dta^);
     {$IFNDEF PS_NOINT64}
     bts64: tbts64(dta^) := -tbts64(dta^);
+    btU64: tbtu64(dta^) := -tbtu64(dta^);
     {$ENDIF}
     btSingle: tbtsingle(dta^) := -tbtsingle(dta^);
     btDouble: tbtdouble(dta^) := -tbtdouble(dta^);
@@ -7056,6 +7449,7 @@ begin
     btS32: tbts32(dta^) := tbts32(tbts32(dta^) = 0);
     {$IFNDEF PS_NOINT64}
     bts64: tbts64(dta^) := tbts64(tbts64(dta^) = 0);
+    btU64: tbtu64(dta^) := tbtu64(tbtu64(dta^) = 0);
     {$ENDIF}
     btVariant:
       begin
@@ -7456,6 +7850,7 @@ begin
   begin
     if PPSResource(FResources[I])^.P = P then
     begin
+      Dispose(PPSResource(FResources[I]));
       FResources.Delete(I);
       exit;
     end;
@@ -7600,6 +7995,7 @@ begin
     btS32: tbts32(dta^) := not tbts32(dta^);
     {$IFNDEF PS_NOINT64}
     bts64: tbts64(dta^) := not tbts64(dta^);
+    btU64: tbtu64(dta^) := not tbtu64(dta^);
     {$ENDIF}
     btVariant:
       begin
@@ -7697,6 +8093,7 @@ function TPSExec.RunScript: Boolean;
 var
   CalcType: Cardinal;
   vd, vs, v3: TPSResultData;
+  VdSlf, VdPtr: Pointer;
   vtemp: PIFVariant;
   p: Cardinal;
   P2: Longint;
@@ -7704,7 +8101,6 @@ var
   Cmd: Cardinal;
   I: Longint;
   pp: TPSExceptionHandler;
-  FExitPoint: Cardinal;
   FOldStatus: TPSStatus;
   Tmp: TObject;
   btemp: Boolean;
@@ -7713,7 +8109,6 @@ begin
 {$IFDEF LOG}
   ODS_stack(Fstack);
 {$ENDIF}
-  FExitPoint := InvalidVal;
   if FStatus = isLoaded then
   begin
     for i := FExceptionStack.Count -1 downto 0 do
@@ -7806,14 +8201,14 @@ begin
               {$IFDEF LOG}
               ODSvar('  * src', vs);
               {$ENDIF}
-              // nx change end
+              // nx change start
 {              if (vd.aType.BaseType = btClass) and (vs.aType.BaseType in [btS32]) then
                 DWord(vd.P^):=Dword(vs.P^)
               else
               if (vd.aType.BaseType in [btS32]) and (vs.aType.BaseType = btClass) then
                 DWord(vd.P^):=Dword(vs.P^)
               else}
-              // nx change start
+              // nx change end
               if not SetVariantValue(vd.P, vs.P, vd.aType, vs.aType) then
               begin
                 if vs.FreeType <> vtNone then
@@ -7863,6 +8258,7 @@ begin
                   7 = AND<br>
                   8 = OR<br>
                   9 = XOR<br>
+                  10 = AS<br>
                 </i><br>
                 VarDest, // no data<br>
                 VarSrc: TPSVariable;<br>
@@ -8214,6 +8610,13 @@ begin
               btemp := true;
               if not ReadVariable(vs, btemp) then
                 Break;
+              { The compiler only emits Cm_CG for boolean types via
+                short-circuit 'or' evaluation in DoBinCalc (guarded by
+                IsBoolean) and for the boundary check in for-loops
+                (ProcessFor). Enum serialization in WriteTypes maps these
+                to btU8 (Boolean/ByteBool), btU16 (WordBool), or btU32
+                (LongBool) only, so btS8/btS16/btS32 never fire and
+                btS64/btU64 are correctly absent. }
               case Vs.aType.BaseType of
                 btU8: btemp := tbtu8(vs.p^) <> 0;
                 btS8: btemp := tbts8(vs.p^) <> 0;
@@ -8254,6 +8657,9 @@ begin
               btemp := true;
               if not ReadVariable(vs, BTemp) then
                 Break;
+              { See Cm_CG comment: only btU8/btU16/btU32 are reachable
+                via short-circuit 'and' in DoBinCalc and for-loop entry
+                checks in ProcessFor. }
               case Vs.aType.BaseType of
                 btU8: btemp := tbtu8(vs.p^) = 0;
                 btS8: btemp := tbts8(vs.p^) = 0;
@@ -8280,7 +8686,6 @@ begin
               {$IFDEF LOG}
               __Log(#13#10'* CM_R (Ret)');
               {$ENDIF}
-              FExitPoint := FCurrentPosition -1;
               P2 := 0;
               if FExceptionStack.Count > 0 then
               begin
@@ -8295,12 +8700,14 @@ begin
                   FCurrStackBase := pp.BasePtr;
                   if pp.FinallyOffset <> InvalidVal then
                   begin
+                    pp.ExitPoint := FCurrentPosition -1;
                     FCurrentPosition := pp.FinallyOffset;
                     pp.FinallyOffset := InvalidVal;
                     p2 := 1;
                     break;
                   end else if pp.Finally2Offset <> InvalidVal then
                   begin
+                    pp.ExitPoint := FCurrentPosition -1;
                     FCurrentPosition := pp.Finally2Offset;
                     pp.Finally2Offset := InvalidVal;
                     p2 := 1;
@@ -8316,7 +8723,6 @@ begin
               end;
               if p2 = 0 then
               begin
-                FExitPoint := InvalidVal;
                 if FCurrStackBase = InvalidVal then
                 begin
                   FStatus := FOldStatus;
@@ -8362,7 +8768,7 @@ begin
               p := Cardinal((@FData^[FCurrentPosition])^);
 	      {$endif}
               Inc(FCurrentPosition, 4);
-              if p > FTypes.Count then
+              if p >= FTypes.Count then
               begin
                 CMD_Err(erInvalidType);
                 break;
@@ -8434,6 +8840,9 @@ begin
               end;
               p := FData^[FCurrentPosition];
               Inc(FCurrentPosition);
+              { See Cm_CG comment: only btU8 is reachable here since
+                ProcessIf always uses FDefaultBoolType for the
+                condition register. }
               case Vd.aType.BaseType of
                 btU8: FJumpFlag := tbtu8(Vd.p^) <> 0;
                 btS8: FJumpFlag := tbts8(Vd.p^) <> 0;
@@ -8488,6 +8897,7 @@ begin
               pp.CurrProc := FCurrProc;
               pp.BasePtr :=FCurrStackBase;
               pp.StackSize := FStack.Count;
+              pp.ExitPoint := InvalidVal;
               if not ReadLong(pp.FinallyOffset) then begin
                 CMD_Err(erOutOfRange);
                 pp.Free;
@@ -8564,15 +8974,13 @@ begin
                       FCurrentPosition := pp.Finally2Offset;
                       pp.Finally2Offset := InvalidVal;
                     end else begin
-                      p := pp.EndOfBlock;
+                      if pp.ExitPoint <> InvalidVal then
+                        p := pp.ExitPoint
+                      else
+                        p := pp.EndOfBlock;
                       pp.Free;
                       FExceptionStack.DeleteLast;
-                      if FExitPoint <> InvalidVal then
-                      begin
-                        FCurrentPosition := FExitPoint;
-                      end else begin
-                        FCurrentPosition := p;
-                      end;
+                      FCurrentPosition := p;
                     end;
                   end;
                 0:
@@ -8589,9 +8997,12 @@ begin
                     end else if pp.Finally2Offset <> InvalidVal then
                     begin
                        FCurrentPosition := pp.Finally2Offset;
-                       pp.ExceptOffset := InvalidVal;
+                       pp.Finally2Offset := InvalidVal;
                     end else begin
-                      p := pp.EndOfBlock;
+                      if pp.ExitPoint <> InvalidVal then
+                        p := pp.ExitPoint
+                      else
+                        p := pp.EndOfBlock;
                       pp.Free;
                       FExceptionStack.DeleteLast;
                       if ExEx <> eNoError then
@@ -8600,12 +9011,7 @@ begin
                         ExObject := nil;
                         ExceptionProc(ExProc, ExPos, ExEx, ExParam, Tmp);
                       end else
-                      if FExitPoint <> InvalidVal then
-                      begin
-                        FCurrentPosition := FExitPoint;
-                      end else begin
                         FCurrentPosition := p;
-                      end;
                     end;
                   end;
                 1:
@@ -8629,7 +9035,10 @@ begin
                       FCurrentPosition := pp.Finally2Offset;
                       pp.Finally2Offset := InvalidVal;
                     end else begin
-                      p := pp.EndOfBlock;
+                      if pp.ExitPoint <> InvalidVal then
+                        p := pp.ExitPoint
+                      else
+                        p := pp.EndOfBlock;
                       pp.Free;
                       FExceptionStack.DeleteLast;
                       if (ExEx <> eNoError) and (p <> InvalidVal) then
@@ -8638,12 +9047,7 @@ begin
                         ExObject := nil;
                         ExceptionProc(ExProc, ExPos, ExEx, ExParam, Tmp);
                       end else
-                      if FExitPoint <> InvalidVal then
-                      begin
-                        FCurrentPosition := FExitPoint;
-                      end else begin
                         FCurrentPosition := p;
-                      end;
                     end;
                   end;
                 3:
@@ -8653,7 +9057,10 @@ begin
                       cmd_err(ErOutOfRange);
                       Break;
                     end;
-                    p := pp.EndOfBlock;
+                    if pp.ExitPoint <> InvalidVal then
+                      p := pp.ExitPoint
+                    else
+                      p := pp.EndOfBlock;
                     pp.Free;
                     FExceptionStack.DeleteLast;
                     if ExEx <> eNoError then
@@ -8662,12 +9069,7 @@ begin
                       ExObject := nil;
                       ExceptionProc(ExProc, ExPos, ExEx, ExParam, Tmp);
                     end else
-                    if FExitPoint <> InvalidVal then
-                    begin
-                      FCurrentPosition := FExitPoint;
-                    end else begin
                       FCurrentPosition := p;
-                    end;
                  end;
               end;
             end;
@@ -8755,7 +9157,9 @@ begin
                 bts32: dec(tbts32(vd.P^));
 {$IFNDEF PS_NOINT64}
                 bts64: dec(tbts64(vd.P^));
+                btU64: dec(tbtu64(vd.P^));
 {$ENDIF}
+                btVariant: dec(Variant(vd.P^));
               else
                 begin
                   CMD_Err(ErTypeMismatch);
@@ -8786,7 +9190,9 @@ begin
                 bts32: Inc(tbts32(vd.P^));
 {$IFNDEF PS_NOINT64}
                 bts64: Inc(tbts64(vd.P^));
+                btU64: Inc(tbtu64(vd.P^));
 {$ENDIF}
+                btVariant: Inc(Variant(vd.P^));
               else
                 begin
                   CMD_Err(ErTypeMismatch);
@@ -8849,11 +9255,13 @@ begin
                 break;
               end;
               p := tbtu32(vd.P^);
+              VdSlf := Pointer(Pointer(IPointer(vd.p)+PointerSize)^);
+              VdPtr := Pointer(Pointer(IPointer(vd.p)+PointerSize2)^);
               if vd.FreeType <> vtNone then
-                FTempVars.Pop;
-              if (p = 0) and (Pointer(Pointer(IPointer(vd.p)+PointerSize2)^) <> nil) then
+                FTempVars.Pop; { This makes vd invalid }
+              if (p = 0) and (VdPtr <> nil) then
               begin
-                if not InvokeExternalMethod(TPSTypeRec_ProcPtr(vd.aType), Pointer(Pointer(IPointer(vd.p)+PointerSize)^), Pointer(Pointer(IPointer(vd.p)+PointerSize2)^)) then
+                if not InvokeExternalMethod(TPSTypeRec_ProcPtr(vd.aType), VdSlf, VdPtr) then
                   Break;
               end else begin
                 if (p >= FProcs.Count) or (p = FMainProc) then begin
@@ -8932,6 +9340,8 @@ begin
                  3 = &lt;<br>
                  4 = &lt;&gt<br>
                  5 = =<br>
+                 6 = IN<br>
+                 7 = IS<br>
                 <i><br>
                 IntoVar: TPSAssignment;<br>
                 Compare1, Compare2: TPSAssigment;<br>
@@ -9056,6 +9466,7 @@ var
   temp: TPSVariantIFC;
   I: Longint;
   b: Boolean;
+  S: string;
   pex: TPSExceptionHandler;
   Tmp: TObject;
 begin
@@ -9125,36 +9536,79 @@ begin
     7: // StrGet
       begin
         temp :=  NewTPSVariantIFC(Stack[Stack.Count -2], True);
-        if (temp.Dta = nil) or not (temp.aType.BaseType in [btString, btUnicodeString]) then
-        begin
+        if temp.Dta = nil then begin
           Result := False;
           exit;
         end;
-        I := Stack.GetInt(-3);
-        if (i<1) or (i>length(tbtstring(temp.Dta^))) then
-        begin
-          Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
-          Result := False;
-          exit;
+        case temp.aType.BaseType of
+          btString:
+            begin
+              I := Stack.GetInt(-3);
+              if (i<1) or (i>length(tbtstring(temp.Dta^))) then
+              begin
+                Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
+                Result := True;
+                exit;
+              end;
+              Stack.SetInt(-1,Ord(tbtstring(temp.Dta^)[i]));
+            end;
+          btUnicodeString:
+            begin
+              I := Stack.GetInt(-3);
+              if (i<1) or (i>length(tbtUnicodeString(temp.Dta^))) then
+              begin
+                Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
+                Result := True;
+                exit;
+              end;
+              Stack.SetInt(-1,Ord(tbtUnicodeString(temp.Dta^)[i]));
+            end;
+
+        else
+          begin
+            Result := False;
+            exit;
+          end;
         end;
-        Stack.SetInt(-1,Ord(tbtstring(temp.Dta^)[i]));
       end;
     8: // StrSet
       begin
         temp := NewTPSVariantIFC(Stack[Stack.Count -3], True);
-        if (temp.Dta = nil) or not (temp.aType.BaseType in [btString, btUnicodeString]) then
+        if (temp.Dta = nil) then
         begin
           Result := False;
           exit;
         end;
-        I := Stack.GetInt(-2);
-        if (i<1) or (i>length(tbtstring(temp.Dta^))) then
-        begin
-          Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
-          Result := True;
-          exit;
+        case temp.aType.BaseType of
+          btString:
+            begin
+              I := Stack.GetInt(-2);
+              if (i<1) or (i>length(tbtstring(temp.Dta^))) then
+              begin
+                Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
+                Result := True;
+                exit;
+              end;
+              tbtstring(temp.Dta^)[i] := tbtchar(Stack.GetInt(-1));
+            end;
+          btUnicodeString:
+            begin
+              I := Stack.GetInt(-2);
+              if (i<1) or (i>length(tbtUnicodeString(temp.Dta^))) then
+              begin
+                Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
+                Result := True;
+                exit;
+              end;
+              tbtUnicodeString(temp.Dta^)[i] := WideChar(Stack.GetInt(-1));
+            end;
+
+        else
+          begin
+            Result := False;
+            exit;
+          end;
         end;
-        tbtstring(temp.Dta^)[i] := tbtchar(Stack.GetInt(-1));
       end;
     10:
 {$IFNDEF PS_NOWIDESTRING}
@@ -9239,7 +9693,14 @@ begin
       Stack.SetWideString(-1, wPadZ(Stack.GetWideString(-2), Stack.GetInt(-3)))// PadZ
     else{$ENDIF}
       Stack.SetAnsiString(-1, PadZ(Stack.GetAnsiString(-2), Stack.GetInt(-3)));// PadZ
-    28: Stack.SetAnsiString(-1, StringOfChar(tbtChar(Stack.GetInt(-2)), Stack.GetInt(-3))); // Replicate/StrOfChar
+    28: // Replicate/StringOfChar
+      begin
+        S := Stack.GetString(-2);
+        if S <> '' then
+          Stack.SetString(-1, StringOfChar(S[1], Stack.GetInt(-3)))
+        else
+          Stack.SetString(-1, StringOfChar(#0, Stack.GetInt(-3)));
+      end;
     29: // Assigned
       begin
         temp := NewTPSVariantIFC(Stack[Stack.Count -2], True);
@@ -9290,7 +9751,11 @@ begin
     39: Stack.SetInt64(-1, StrToInt64(string(Stack.GetAnsiString(-2))));  // StrToInt64
     40: Stack.SetAnsiString(-1, tbtstring(SysUtils.IntToStr(Stack.GetInt64(-2))));// Int64ToStr
     41: Stack.SetInt64(-1, StrToInt64Def(string(Stack.GetAnsiString(-2)), Stack.GetInt64(-3))); // StrToInt64Def
+    45: Stack.SetUInt64(-1, StrToUInt64(string(Stack.GetAnsiString(-2))));  // StrToUInt64
+    46: Stack.SetAnsiString(-1, tbtstring(SysUtils.UIntToStr(Stack.GetUInt64(-2))));// UInt64ToStr
+    47: Stack.SetUInt64(-1, StrToUInt64Def(string(Stack.GetAnsiString(-2)), Stack.GetUInt64(-3))); // StrToUInt64Def
 {$ENDIF}
+    48: Stack.SetAnsiString(-1, tbtstring(SysUtils.UIntToStr({$IFNDEF PS_NOINT64}Stack.GetUInt64(-2){$ELSE}Stack.GetUInt(-2){$ENDIF}))); // UIntToStr
     42:  // sizeof
       begin
         temp := NewTPSVariantIFC(Stack[Stack.Count -2], False);
@@ -9314,7 +9779,7 @@ begin
               if (i<1) or (i>length(tbtwidestring(temp.Dta^))) then
               begin
                 Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
-                Result := False;
+                Result := True;
                 exit;
               end;
               Stack.SetInt(-1,Ord(tbtwidestring(temp.Dta^)[i]));
@@ -9325,7 +9790,7 @@ begin
               if (i<1) or (i>length(tbtUnicodeString(temp.Dta^))) then
               begin
                 Caller.CMD_Err2(erCustomError, tbtString(RPS_OutOfStringRange));
-                Result := False;
+                Result := True;
                 exit;
               end;
               Stack.SetInt(-1,Ord(tbtUnicodeString(temp.Dta^)[i]));
@@ -9378,6 +9843,7 @@ begin
         end;
       end;
 {$ENDIF}
+    //45-48: see above
     else
     begin
       Result := False;
@@ -9536,6 +10002,7 @@ begin
     btS32        : Stack.SetInt(-1,Low(Integer));     //Integer/LongInt: -2147483648
 {$IFNDEF PS_NOINT64}
     btS64        : Stack.SetInt64(-1,Low(Int64));     //Int64: -9223372036854775808
+    btU64        : Stack.SetUInt64(-1,Low(UInt64));   //UInt64: 0
 {$ENDIF}
     else Result:=false;
   end;
@@ -9559,6 +10026,7 @@ begin
     btS32        : Stack.SetInt(-1,High(Integer));    //Integer/LongInt: 2147483647
 {$IFNDEF PS_NOINT64}
     btS64        : Stack.SetInt64(-1,High(Int64));    //Int64: 9223372036854775807
+    btU64        : Stack.SetUInt64(-1,High(UInt64));  //UInt64: 18446744073709551615
 {$ENDIF}
     else Result:=false;
   end;
@@ -9579,6 +10047,7 @@ begin
     btS32        : Stack.SetInt(-1,Tbts32(arr.dta^)-1);    //Integer/LongInt
 {$IFNDEF PS_NOINT64}
     btS64        : Stack.SetInt64(-1,Tbts64(arr.dta^)-1);
+    btU64        : Stack.SetUInt64(-1,Tbtu64(arr.dta^)-1);
 {$ENDIF}
     else Result:=false;
   end;
@@ -9599,6 +10068,7 @@ begin
     btS32        : Stack.SetInt(-1,Tbts32(arr.dta^)+1);    //Integer/LongInt
 {$IFNDEF PS_NOINT64}
     btS64        : Stack.SetInt64(-1,Tbts64(arr.dta^)+1);
+    btU64        : Stack.SetUInt64(-1,Tbtu64(arr.dta^)+1);
 {$ENDIF}
     else Result:=false;
   end;
@@ -9658,6 +10128,7 @@ begin
   RegisterFunctionName('!NOTIFICATIONVARIANTGET', NVarProc, Pointer(1), nil);
 
   RegisterFunctionName('IntToStr', DefProc, Pointer(0), nil);
+  RegisterFunctionName('UIntToStr', DefProc, Pointer(48), nil);
   RegisterFunctionName('StrToInt', DefProc, Pointer(1), nil);
   RegisterFunctionName('StrToIntDef', DefProc, Pointer(2), nil);
   RegisterFunctionName('Pos', DefProc, Pointer(3), nil);
@@ -9727,6 +10198,9 @@ begin
   RegisterFunctionName('StrToInt64', DefProc, Pointer(39), nil);
   RegisterFunctionName('Int64ToStr', DefProc, Pointer(40), nil);
   RegisterFunctionName('StrToInt64Def', DefProc, Pointer(41), nil);
+  RegisterFunctionName('StrToUInt64', DefProc, Pointer(45), nil);
+  RegisterFunctionName('UInt64ToStr', DefProc, Pointer(46), nil);
+  RegisterFunctionName('StrToUInt64Def', DefProc, Pointer(47), nil);
   {$ENDIF}
   RegisterFunctionName('SizeOf', DefProc, Pointer(42), nil);
 
@@ -9785,7 +10259,7 @@ begin
   case aType.BaseType of
     btVariant: Dest := variant(src^);
     btArray: if not BuildArray(Pointer(Src^), TPSTypeRec_Array(aType).ArrayType, PSDynArrayGetLength(Pointer(src^), aType)) then begin result := false; exit; end;
-    btStaticArray: if not BuildArray(Pointer(Src), TPSTypeRec_StaticArray(aType).ArrayType, PSDynArrayGetLength(Pointer(src^), aType)) then begin result := false; exit; end;
+    btStaticArray: if not BuildArray(Pointer(Src), TPSTypeRec_StaticArray(aType).ArrayType, TPSTypeRec_StaticArray(aType).Size) then begin result := false; exit; end;
     btU8:
       if aType.ExportName = 'BOOLEAN' then
         Dest := boolean(tbtu8(Src^) <> 0)
@@ -9809,7 +10283,12 @@ begin
     btString: Dest := tbtString(Src^);
     btPChar: Dest := ToString(PansiChar(Src^));
   {$IFNDEF PS_NOINT64}
-  {$IFDEF DELPHI6UP} btS64: Dest := tbts64(Src^); {$ELSE} bts64: begin Result := False; exit; end; {$ENDIF}
+  {$IFDEF DELPHI6UP}
+    btS64: Dest := tbts64(Src^);
+    btU64: Dest := tbtu64(Src^);
+  {$ELSE}
+    btS64, btU64: begin Result := False; exit; end;
+  {$ENDIF}
   {$ENDIF}
     btChar: Dest := tbtString(tbtchar(src^));
   {$IFNDEF PS_NOWIDESTRING}
@@ -9847,7 +10326,7 @@ end;
 type
   POpenArray = ^TOpenArray;
   TOpenArray = record
-    AType: Byte; {0}
+    AType: Byte; {0} { Must be first field, matching x64.inc's TMethodCallData }
     OrgVar: PPSVariantIFC;
     FreeIt: Boolean;
     ElementSize,
@@ -9888,6 +10367,9 @@ begin
     Result.Data := datap;
     exit;
   end;
+
+  { BaseType is btPointer, which means array of const }
+
   Result.FreeIt := True;
   Result.ElementSize := sizeof(TVarRec);
   GetMem(Result.Data, Result.ItemCount * Result.ElementSize);
@@ -9976,6 +10458,11 @@ begin
             tvarrec(p^).VType := vtInt64;
             New(tvarrec(p^).VInt64);
             tvarrec(p^).VInt64^ := tbts64(cp^);
+          end;
+        btU64: begin
+            tvarrec(p^).VType := vtInt64;
+            New(tvarrec(p^).VInt64);
+            tvarrec(p^).VInt64^ := tbtu64(cp^);
           end;
         {$ENDIF}
         btString: begin
@@ -10078,6 +10565,11 @@ begin
               tbts64(cp^) := tvarrec(p^).vInt64^;
             dispose(tvarrec(p^).VInt64);
           end;
+        btU64: begin
+            if v^.VarParam then
+              tbtu64(cp^) := tvarrec(p^).vInt64^;
+            dispose(tvarrec(p^).VInt64);
+          end;
         {$ENDIF}
         {$IFNDEF PS_NOWIDESTRING}
         btWideChar: begin
@@ -10115,7 +10607,7 @@ begin
         btInterface: begin
           if v^.VarParam then
             IUnknown(cp^) := IUnknown(TVarRec(p^).VInterface);
-          finalize(tbtString(TVarRec(p^).VAnsiString));
+          IUnknown(TVarRec(p^).VInterface) := nil;
         end;
 {$ENDIF}
 {$ENDIF}
@@ -10166,6 +10658,8 @@ end;
       {$include x86.inc}
     {$elseif defined(cpupowerpc)}
       {$include powerpc.inc}
+    {$elseif defined(cpuaarch64)}
+      {$include arm64.inc}
     {$elseif defined(cpuarm)}
       {$include arm.inc}
     {$elseif defined(CPUX86_64)}
@@ -10424,6 +10918,13 @@ begin
       Result.aType := nil;
       exit;
     end;
+
+    if TPSTypeRec_Array(Result.aType).ArrayType.BaseType = btPointer then begin
+      { See CreateOpenArray }
+      Result := PPSVariantIFC(IPointer(Result.Dta^) + IPointer(Fieldno) * 3 * SizeOf(Pointer))^;
+      exit;
+    end;
+
     Offs := TPSTypeRec_Array(Result.aType).ArrayType.RealSize * Cardinal(FieldNo);
         if Result.aType.BaseType = btStaticArray then
           Result.Dta := Pointer(IPointer(Result.dta) + Offs)
@@ -10976,6 +11477,10 @@ begin
         btS16: SetOrdProp(TObject(FSelf), PPropInfo(p.Ext1), tbts16(n.Dta^));
         btU32: SetOrdProp(TObject(FSelf), PPropInfo(p.Ext1), tbtu32(n.Dta^));
         btS32: SetOrdProp(TObject(FSelf), PPropInfo(p.Ext1), tbts32(n.Dta^));
+        {$IFNDEF PS_NOINT64}
+        btS64: SetInt64Prop(TObject(FSelf), PPropInfo(p.Ext1), tbts64(n.Dta^));
+        btU64: SetInt64Prop(TObject(FSelf), PPropInfo(p.Ext1), tbtu64(n.Dta^));
+        {$ENDIF}
         btSingle: SetFloatProp(TObject(FSelf), p.Ext1, tbtsingle(n.Dta^));
         btDouble: SetFloatProp(TObject(FSelf), p.Ext1, tbtdouble(n.Dta^));
         btExtended: SetFloatProp(TObject(FSelf), p.Ext1, tbtextended(n.Dta^));
@@ -11039,6 +11544,10 @@ begin
         btS16: tbts16(n.Dta^) := GetOrdProp(TObject(FSelf), p.Ext1);
         btU32: tbtu32(n.Dta^) := GetOrdProp(TObject(FSelf), p.Ext1);
         btS32: tbts32(n.Dta^) := GetOrdProp(TObject(FSelf), p.Ext1);
+        {$IFNDEF PS_NOINT64}
+        btS64: tbts64(n.Dta^) := GetInt64Prop(TObject(FSelf), p.Ext1);
+        btU64: tbtu64(n.Dta^) := GetInt64Prop(TObject(FSelf), p.Ext1);
+        {$ENDIF}
         btSingle: tbtsingle(n.Dta^) := GetFloatProp(TObject(FSelf), p.Ext1);
         btDouble: tbtdouble(n.Dta^) := GetFloatProp(TObject(FSelf), p.Ext1);
         btExtended: tbtextended(n.Dta^) := GetFloatProp(TObject(FSelf), p.Ext1);
@@ -11169,6 +11678,12 @@ begin
       exit;
     end;
     FSelf := Tobject(n.dta^);
+    if FSelf = nil then
+    begin
+      Caller.CMD_Err(erCouldNotCallProc);
+      Result := False;
+      exit;
+    end;
     Params := TPSList.Create;
     Params.Add(NewPPSVariantIFC(Stack[Longint(Stack.Count) - 1], True));
     for i := Stack.Count -3 downto Longint(Stack.Count) - ParamCount -2 do
@@ -11194,8 +11709,14 @@ begin
       exit;
     end;
     FSelf := Tobject(n.dta^);
+    if FSelf = nil then
+    begin
+      Caller.CMD_Err(erCouldNotCallProc);
+      Result := False;
+      exit;
+    end;
     Params := TPSList.Create;
-    Params.Add(NewPPSVariantIFC(Stack[Longint(Stack.Count) - 2], True));
+    Params.Add(NewPPSVariantIFC(Stack[Longint(Stack.Count) - ParamCount - 2], False));
 
     for i := Stack.Count -2 downto Longint(Stack.Count) - ParamCount -1 do
     begin
@@ -11931,13 +12452,33 @@ begin
   s := '';
 end;
 
-{$ifdef CPUX64}
-
-{.$DEFINE empty_methods_handler}
+function AlwaysAsVariable(aType: TPSTypeRec): Boolean;
+begin
+  case atype.BaseType of
+    btVariant: Result := true;
+{$IFDEF CPU64}
+    { See the btSet/btRecord/btStaticArray comment in x64.inc }
+    btSet: Result := not (atype.RealSize in [1, 2, 3, 4{$IFDEF DELPHI}{$IFNDEF DELPHI_RIO_UP}, 5, 6, 7, 8{$ENDIF}{$ENDIF}]);
+    btRecord, btStaticArray: Result := not (atype.RealSize in [1, 2, 4{$IFDEF DELPHI}{$IFNDEF DELPHI_RIO_UP}, 5, 6, 7, 8{$ENDIF}{$ENDIF}]);
+{$ELSE}
+    btSet, btRecord, btStaticArray: Result := atype.RealSize > PointerSize;
 {$ENDIF}
+  else
+    Result := false;
+  end;
+end;
+
+function ParamAsVariable(const Modifier: tbtchar; aType: TPSTypeRec): Boolean;
+begin
+  Result := (Modifier = '%') or (Modifier = '!') or AlwaysAsVariable(aType);
+end;
 
 {$ifdef fpc}
   {$if defined(cpupowerpc) or defined(cpuarm) or defined(cpu64)}
+    {$define empty_methods_handler}
+  {$ifend}
+{$else}
+  {$if defined(cpuarm) or defined(cpuarm64)}
     {$define empty_methods_handler}
   {$ifend}
 {$endif}
@@ -11949,10 +12490,12 @@ end;
 {$else}
 
 
-function MyAllMethodsHandler2(Self: PScriptMethodInfo; const Stack: PPointer; _EDX, _ECX: Pointer): Integer; forward;
 {$IFDEF CPU64}
-function MyAllMethodsHandler3(Self: PScriptMethodInfo; _RDX, _R8, _R9:Pointer; Stack: PPointer;  _XMM1, _XMM2, _XMM3: Pointer): Integer; forward;
+function MyAllMethodsHandler64(Self: PScriptMethodInfo; _RDX, _R8, _R9:Pointer; Stack: PPointer;  _XMM1, _XMM2, _XMM3: Pointer; {$IFDEF DELPHI} ResPtr: Pointer {$ENDIF}): Integer; forward;
+{$ELSE}
+function MyAllMethodsHandler32(Self: PScriptMethodInfo; const Stack: PPointer; _EDX, _ECX: Pointer{$IFDEF DELPHI}; ResPtr: Pointer{$ENDIF}): Integer; forward;
 {$ENDIF}
+
 procedure MyAllMethodsHandler;
 {$ifdef CPU64}
 //  On entry:
@@ -11964,6 +12507,47 @@ procedure MyAllMethodsHandler;
 //  - procedure
 //    * RDX, R8, R9 - param1 - param3
 //    * STACK = param4... paramcount
+{$IFDEF DELPHI}
+asm
+  // SEH-compatible frame: .params 4 = 32 bytes local storage
+  // Layout: ResPtr(8) + 3*unused(8) = 32 bytes
+  // Stack: [rbp+0..31]=local, [rbp+32]=saved RBP, [rbp+40]=ret addr,
+  //        [rbp+48..79]=shadow, [rbp+80+]=caller's 5th+ params
+  .params 4
+  // Note: Delphi x64 .params test results:
+  // .params 1..4: stack starts at [rbp+80]
+  // .params 5..6: stack starts at [rbp+96]
+  // .params 7..8: stack starts at [rbp+112]
+
+  xor     rax, rax              // Clear ResPtr (same as push 0 by 32-bit code)
+  mov     [rbp+0], rax
+
+  // MyAllMethodsHandler64 has 9 parameters: 4 via registers, 5 via stack
+  // shadow space for callee(32) + 5 stack params(40) + alignment to 16 bytes(8) = 72+8 = 80 bytes
+  sub     rsp, 80
+
+  // Call MyAllMethodsHandler64(Self, _RDX, _R8, _R9, Stack, _XMM1, _XMM2, _XMM3, ResPtr)
+  // RCX (Self), RDX, R8, R9 already contain the values we need
+  lea     rax, [rbp+80]         // Stack ptr
+  mov     [rsp+32], rax
+  movq    rax, xmm1             // XMM1 raw value
+  mov     [rsp+40], rax
+  movq    rax, xmm2             // XMM2 raw value
+  mov     [rsp+48], rax
+  movq    rax, xmm3             // XMM3 raw value
+  mov     [rsp+56], rax
+  lea     rax, [rbp+0]          // ResPtr
+  mov     [rsp+64], rax         // 64+8 = 72
+
+  call    MyAllMethodsHandler64
+
+  add     rsp, 80
+
+  // Return ResPtr in both XMM0 and RAX, allowing the caller to choose correct one
+  movq    xmm0, [rbp+0]
+  mov     rax, [rbp+0]
+end;
+{$ELSE}
 asm
   PUSH RBP
   MOVQ RAX, XMM3
@@ -11980,18 +12564,42 @@ asm
   // Rdx -1st param
   // Rcx - Self
   SUB RSP, 20h
-  CALL MyAllMethodsHandler3
+  CALL MyAllMethodsHandler64
   ADD   RSP, 20h  //Restore stack
   ADD   RSP, 40h
   POP RAX
   SUB RSP, 40h
   ADD RSP, 4*8
 end;
+{$ENDIF}
 {$else}
 //  On entry:
 //     EAX = Self pointer
 //     EDX, ECX = param1 and param2
 //     STACK = param3... paramcount
+{$IFDEF DELPHI}
+asm
+  // Like the Win64 stub: the stub owns an 8-byte result slot and passes its
+  // address to MyAllMethodsHandler32 as ResPtr, so that an Int64/UInt64
+  // result also fits; the slot is loaded into EDX:EAX below
+  push 0                // result slot, high dword
+  push 0                // result slot, low dword
+  push ecx              // _ECX stack arg
+  mov ecx, edx          // _EDX register arg
+  lea edx, [esp+4]
+  push edx              // ResPtr stack arg
+  lea edx, [esp+20]     // Stack register arg: the caller's stack params
+  call MyAllMethodsHandler32
+  // EAX = byte count of the caller's stack params, popped callee-style below
+  // Stack now: result slot (2 dwords), return address, caller's stack params
+  mov edx, [esp+8]
+  mov [esp+eax+8], edx  // park the return address just below the params' end
+  mov ecx, [esp]
+  mov edx, [esp+4]
+  lea esp, [esp+eax+8]  // pop the slot, old return address and params
+  mov eax, ecx
+end;
+{$ELSE}
 asm
   push 0
   push ecx
@@ -11999,14 +12607,15 @@ asm
   mov edx, esp
   add edx, 16 // was 12
   pop ecx
-  call MyAllMethodsHandler2
+  call MyAllMethodsHandler32
   pop ecx
   mov edx, [esp]
   add esp, eax
   mov [esp], edx
   mov eax, ecx
 end;
-{$endif empty_methods_handler}
+{$ENDIF}
+{$endif CPU64}
 
 function ResultAsRegister(b: TPSTypeRec): Boolean;
 begin
@@ -12014,6 +12623,7 @@ begin
     btSingle,
     btDouble,
     btExtended,
+    btCurrency,
     btU8,
     bts8,
     bts16,
@@ -12025,6 +12635,7 @@ begin
 {$ENDIF}
 {$IFNDEF PS_NOINT64}
     bts64,
+    btU64,
 {$ENDIF}
     btPChar,
 {$IFNDEF PS_NOWIDESTRING}
@@ -12033,8 +12644,21 @@ begin
     btChar,
     btclass,
     btEnum: Result := true;
+{$IFDEF DELPHI}
+    { The Delphi x64 ABI returns a record of 1, 2, or 4 bytes in RAX, and
+      the x86 ABI a record of 1 or 2 bytes in AL/AX (see System.Rtti's
+      UseResultPointer). Records of these sizes never contain a managed
+      field, so no managed check is needed. A record of pointer size is
+      also returned in RAX/EAX, but only when it contains no managed
+      field. Static arrays follow the same rule: UseResultPointer treats
+      tkArray like tkRecord. }
+    btRecord, btStaticArray: Result := (b.RealSize in [1, 2{$IFDEF CPU64}, 4{$ENDIF}]) or
+      ((b.RealSize = PointerSize) and not IsManagedType(b));
+{$ENDIF}
     btSet: Result := b.RealSize <= PointerSize;
+{$IFNDEF DELPHI}
     btStaticArray: Result := b.RealSize <= PointerSize;
+{$ENDIF}
   else
     Result := false;
   end;
@@ -12049,6 +12673,12 @@ begin
     btu16,
     bts32,
     btu32,
+{$IFDEF CPU64} 
+{$IFNDEF PS_NOINT64}
+    bts64,
+    btU64,
+{$ENDIF}
+{$ENDIF}
     btstring,
     btclass,
 {$IFNDEF PS_NOINTERFACES}
@@ -12063,24 +12693,23 @@ begin
     btChar,
     btArray,
     btEnum: Result := true;
+{$IFDEF DELPHI}
+    { See the btSet/btRecord/btStaticArray comment in x64.inc. Delphi's set
+      storage rounding needs a case here only when it crosses the by-value/
+      by-reference boundary: 3 (by reference) rounds to 4 (by value), while
+      the rounding of 5-7 to 8 does not (all by reference) }
+    btSet: Result := b.RealSize in [1, 2, 3, 4{$IFDEF CPU64}{$IFNDEF DELPHI_RIO_UP}, 5, 6, 7, 8{$ENDIF}{$ENDIF}];
+    btRecord, btStaticArray: Result := b.RealSize in [1, 2, 4{$IFDEF CPU64}{$IFNDEF DELPHI_RIO_UP}, 5, 6, 7, 8{$ENDIF}{$ENDIF}];
+{$ELSE}
     btSet: Result := b.RealSize <= PointerSize;
     btStaticArray: Result := b.RealSize <= PointerSize;
+{$ENDIF}
 {$IFDEF CPU64}
     btSingle,
-    btDouble: Result := True;
+    btDouble,
+    btExtended,
+    btCurrency: Result := True;
 {$ENDIF}
-  else
-    Result := false;
-  end;
-end;
-
-function AlwaysAsVariable(aType: TPSTypeRec): Boolean;
-begin
-  case atype.BaseType of
-    btVariant: Result := true;
-    btSet: Result := atype.RealSize > PointerSize;
-    btRecord: Result := atype.RealSize > PointerSize;
-    btStaticArray: Result := atype.RealSize > PointerSize;
   else
     Result := false;
   end;
@@ -12092,8 +12721,14 @@ asm
   fld tbyte ptr [ft]
 
 end;
+
+procedure PutOnFPUStackCurrency(cu: currency);
+asm
+  fild qword ptr [cu]
+end;
+
 {$IFDEF CPU64}
-function MyAllMethodsHandler3(Self: PScriptMethodInfo; _RDX, _R8, _R9:Pointer; Stack: PPointer;  _XMM1, _XMM2, _XMM3: Pointer): Integer;
+function MyAllMethodsHandler64(Self: PScriptMethodInfo; _RDX, _R8, _R9:Pointer; Stack: PPointer;  _XMM1, _XMM2, _XMM3: Pointer; {$IFDEF DELPHI} ResPtr: Pointer {$ENDIF}): Integer;
 var
   Decl: tbtString;
   I, C, regno: Integer;
@@ -12158,7 +12793,7 @@ begin
     fmod := e[1];
     delete(e, 1, 1);
     cpt := Self.Se.GetTypeNo(StrToInt(e));
-    if ((fmod = '%') or (fmod = '!') or (AlwaysAsVariable(cpt))) and (RegNo < 3) then
+    if ParamAsVariable(fmod, cpt) and (RegNo < 3) then
     begin
       tmp := CreateHeapVariant(self.Se.FindType2(btPointer));
       PPSVariantPointer(tmp).DestType := cpt;
@@ -12184,21 +12819,21 @@ begin
       Params[i] := tmp;
       case regno of
         0: begin
-            if cpt.BaseType in [btSingle, btDouble] then
+            if cpt.BaseType in [btSingle, btDouble, btExtended] then
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_XMM1, 1, cpt)
             else
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_RDX, 1, cpt);
             inc(regno);
           end;
         1: begin
-            if cpt.BaseType in [btSingle, btDouble] then
+            if cpt.BaseType in [btSingle, btDouble, btExtended] then
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_XMM2, 1, cpt)
             else
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_R8, 1, cpt);
             inc(regno);
           end;
         2: begin
-            if cpt.BaseType in [btSingle, btDouble] then
+            if cpt.BaseType in [btSingle, btDouble, btExtended] then
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_XMM3, 1, cpt)
             else
               CopyArrayContents(@PPSVariantData(tmp)^.Data, @_R9, 1, cpt);
@@ -12216,21 +12851,19 @@ begin
     delete(e, 1, 1);
     if Params[i] <> nil then Continue;
     cpt := Self.Se.GetTypeNo(StrToInt(e));
-    if (fmod = '%') or (fmod = '!') or (AlwaysAsVariable(cpt)) then begin
+    if ParamAsVariable(fmod, cpt) then begin
       tmp := CreateHeapVariant(self.Se.FindType2(btPointer));
       PPSVariantPointer(tmp).DestType := cpt;
       Params[i] := tmp;
       PPSVariantPointer(tmp).DataDest := Pointer(FStack^);
-      FStack := Pointer(IPointer(FStack) + PointerSize);
-      Inc(Result, PointerSize);
     end
     else begin
       tmp := CreateHeapVariant(cpt);
       Params[i] := tmp;
       CopyArrayContents(@PPSVariantData(tmp)^.Data, Pointer(FStack), 1, cpt);
-      FStack := Pointer((IPointer(FStack) + cpt.RealSize + 3) and not 3);
-      Inc(Result, (cpt.RealSize + 3) and not 3);
     end;
+    FStack := Pointer(IPointer(FStack) + PointerSize);
+    Inc(Result, PointerSize);
   end;
   ex := TPSExceptionHandler.Create;
   ex.FinallyOffset := InvalidVal;
@@ -12250,6 +12883,9 @@ begin
   if (Res <> nil) then begin
     Params.DeleteLast;
     if (ResultAsRegister(Res.FType)) then begin
+{$IFDEF DELPHI}
+      CopyArrayContents(ResPtr, @PPSVariantData(res)^.Data, 1, Res^.FType);
+{$ELSE}
       if (res^.FType.BaseType = btSingle) or (res^.FType.BaseType = btDouble) or
       (res^.FType.BaseType = btCurrency) or (res^.Ftype.BaseType = btExtended) then begin
         case Res^.FType.BaseType of
@@ -12264,7 +12900,11 @@ begin
       else begin
         CopyArrayContents(Pointer(IPointer(Stack)-IPointer(PointerSize2)), @PPSVariantData(res)^.Data, 1, Res^.FType);
       end;
-    end;
+{$ENDIF}
+    end{$IFDEF DELPHI} else begin
+      { The Win64 ABI requires returning the hidden result pointer in RAX }
+      PPointer(ResPtr)^ := PPSVariantPointer(Res).DataDest;
+    end{$ENDIF};
     DestroyHeapVariant(res);
   end;
   for i := 0 to Params.Count - 1 do
@@ -12280,9 +12920,8 @@ begin
       raise EPSException.Create(PSErrorToString(Self.SE.ExceptionCode, Self.Se.ExceptionString), Self.Se, Self.Se.ExProc, Self.Se.ExPos);
   end;
 end;
-{$ENDIF}
-
-function MyAllMethodsHandler2(Self: PScriptMethodInfo; const Stack: PPointer; _EDX, _ECX: Pointer): Integer;
+{$ELSE}
+function MyAllMethodsHandler32(Self: PScriptMethodInfo; const Stack: PPointer; _EDX, _ECX: Pointer{$IFDEF DELPHI}; ResPtr: Pointer{$ENDIF}): Integer;
 var
   Decl: tbtString;
   I, C, regno: Integer;
@@ -12318,7 +12957,7 @@ begin
     fmod := e[1];
     delete(e, 1, 1);
     cpt := Self.Se.GetTypeNo(StrToInt(e));
-    if ((fmod = '%') or (fmod = '!') or (AlwaysAsVariable(cpt))) and (RegNo < 2) then
+    if ParamAsVariable(fmod, cpt) and (RegNo < 2) then
     begin
       tmp := CreateHeapVariant(self.Se.FindType2(btPointer));
       PPSVariantPointer(tmp).DestType := cpt;
@@ -12384,7 +13023,7 @@ begin
     delete(e, 1, 1);
     if Params[i] <> nil then Continue;
     cpt := Self.Se.GetTypeNo(StrToInt(e));
-    if (fmod = '%') or (fmod = '!') or (AlwaysAsVariable(cpt)) then
+    if ParamAsVariable(fmod, cpt) then
     begin
       tmp := CreateHeapVariant(self.Se.FindType2(btPointer));
       PPSVariantPointer(tmp).DestType := cpt;
@@ -12437,16 +13076,21 @@ begin
           btSingle: PutOnFPUStackExtended(PPSVariantSingle(res).Data);
           btDouble: PutOnFPUStackExtended(PPSVariantDouble(res).Data);
           btExtended: PutOnFPUStackExtended(PPSVariantExtended(res).Data);
-          btCurrency: PutOnFPUStackExtended(PPSVariantCurrency(res).Data);
+          { Currency is returned on the FPU stack as its scaled integer backing (FILD), not its logical value }
+          btCurrency: PutOnFPUStackCurrency(PPSVariantCurrency(res).Data);
         end;
         DestroyHeapVariant(Res);
         Res := nil;
       end else
       begin
+{$IFDEF DELPHI}
+        CopyArrayContents(ResPtr, @PPSVariantData(res)^.Data, 1, Res^.FType);
+{$ELSE}
 {$IFNDEF PS_NOINT64}
-        if res^.FType.BaseType <> btS64 then
+  if (res^.FType.BaseType <> btS64) and (res^.FType.BaseType <> btU64) then
 {$ENDIF}
           CopyArrayContents(Pointer(IPointer(Stack)-PointerSize2), @PPSVariantData(res)^.Data, 1, Res^.FType);
+{$ENDIF}
       end;
     end;
     DestroyHeapVariant(res);
@@ -12465,7 +13109,9 @@ begin
       raise EPSException.Create(PSErrorToString(Self.SE.ExceptionCode, Self.Se.ExceptionString), Self.Se, Self.Se.ExProc, Self.Se.ExPos);
   end;
 end;
-{$endif}
+{$ENDIF CPU64}
+{$endif empty_methods_handler}
+
 function TPSRuntimeClassImporter.FindClass(const Name: tbtString): TPSRuntimeClass;
 var
   h, i: Longint;
@@ -12823,6 +13469,17 @@ begin
     val := items[ItemNo];
   Result := PSGetInt64(@PPSVariantData(val).Data, val.FType);
 end;
+
+function TPSStack.GetUInt64(ItemNo: Longint): UInt64;
+var
+  val: PPSVariant;
+begin
+  if ItemNo < 0 then
+    val := items[Longint(ItemNo) + Longint(Count)]
+  else
+    val := items[ItemNo];
+  Result := PSGetUInt64(@PPSVariantData(val).Data, val.FType);
+end;
 {$ENDIF}
 
 function TPSStack.GetItem(I: Longint): PPSVariant;
@@ -12965,6 +13622,7 @@ begin
       FDataPtr := nil;
     end;
     FCapacity := 0;
+    Exit;
   end;
   GetMem(p, Value);
   if FDataPtr <> nil then
@@ -13047,6 +13705,20 @@ begin
   PSSetInt64(@PPSVariantData(val).Data, val.FType, ok, Data);
   if not ok then raise Exception.Create(RPS_TypeMismatch);
 end;
+
+procedure TPSStack.SetUInt64(ItemNo: Longint; const Data: UInt64);
+var
+  val: PPSVariant;
+  ok: Boolean;
+begin
+  if ItemNo < 0 then
+    val := items[Longint(ItemNo) + Longint(Count)]
+  else
+    val := items[ItemNo];
+  ok := true;
+  PSSetUInt64(@PPSVariantData(val).Data, val.FType, ok, Data);
+  if not ok then raise Exception.Create(RPS_TypeMismatch);
+end;
 {$ENDIF}
 
 procedure TPSStack.SetReal(ItemNo: Longint; const Data: Extended);
@@ -13119,6 +13791,7 @@ begin
     val := items[ItemNo];
   ok := true;
   PSSetUnicodeString(@PPSVariantData(val).Data, val.FType, ok, Data);
+  if not ok then raise Exception.Create(RPS_TypeMismatch);
 end;
 
 procedure TPSStack.SetWideString(ItemNo: Longint;

@@ -43,10 +43,16 @@ type
     procedure VisibleW( T: Boolean);
     procedure ParentR( var T: TWinControl);
     procedure ParentW( T: TWinControl);
-    procedure SHOWHINT_W( T: BOOLEAN);
-    procedure SHOWHINT_R( var T: BOOLEAN);
     procedure ENABLED_W( T: BOOLEAN);
     procedure ENABLED_R( var T: BOOLEAN);
+    {$IFDEF DELPHI23UP}
+    procedure StyleElementsR(  var T: TStyleElements);
+    procedure StyleElementsW( T: TStyleElements);
+    {$ENDIF}
+    {$IFDEF DELPHI26UP}
+    procedure StyleNameR( var T: string);
+    procedure StyleNameW( T: string);
+    {$ENDIF}
   end;
 
 procedure TControl_PSHelper.AlignR( var T: Byte); begin T := Byte(Self.Align); end;
@@ -67,11 +73,18 @@ procedure TControl_PSHelper.VisibleW( T: Boolean); begin Self.Visible:= T; end;
 procedure TControl_PSHelper.ParentR( var T: TWinControl); begin T := Self.Parent; end;
 procedure TControl_PSHelper.ParentW( T: TWinControl); begin Self.Parent:= T; end;
 
-
-procedure TControl_PSHelper.SHOWHINT_W( T: BOOLEAN); begin Self.SHOWHINT := T; end;
-procedure TControl_PSHelper.SHOWHINT_R( var T: BOOLEAN); begin T := Self.SHOWHINT; end;
 procedure TControl_PSHelper.ENABLED_W( T: BOOLEAN); begin Self.ENABLED := T; end;
 procedure TControl_PSHelper.ENABLED_R( var T: BOOLEAN); begin T := Self.ENABLED; end;
+
+{$IFDEF DELPHI23UP}
+procedure TControl_PSHelper.StyleElementsR( var T: TStyleElements); begin T := Self.StyleElements; end;
+procedure TControl_PSHelper.StyleElementsW( T: TStyleElements); begin Self.StyleElements:= T; end;
+{$ENDIF}
+
+{$IFDEF DELPHI26UP}
+procedure TControl_PSHelper.StyleNameR( var T: string); begin T := Self.StyleName; end;
+procedure TControl_PSHelper.StyleNameW( T: string); begin Self.StyleName:= T; end;
+{$ENDIF}
 
 procedure RIRegisterTControl(Cl: TPSRuntimeClassImporter);
 begin
@@ -94,6 +107,13 @@ begin
     RegisterPropertyHelper(@TControl.ClientWidthR, @TControl.ClientWidthW, 'ClientWidth');
     RegisterPropertyHelper(@TControl.VisibleR, @TControl.VisibleW, 'Visible');
     RegisterPropertyHelper(@TControl.ENABLED_R, @TControl.ENABLED_W, 'Enabled');
+    
+    {$IFDEF DELPHI23UP}
+    RegisterPropertyHelper(@TControl.StyleElementsR, @TControl.StyleElementsW, 'StyleElements');
+    {$ENDIF}
+    {$IFDEF DELPHI26UP}
+    RegisterPropertyHelper(@TControl.StyleNameR, @TControl.StyleNameW, 'StyleName');
+    {$ENDIF}
 
     RegisterPropertyHelper(@TControl.ParentR, @TControl.ParentW, 'Parent');
 
@@ -101,7 +121,6 @@ begin
     RegisterMethod(@TControl.Dragging, 'Dragging');
     RegisterMethod(@TControl.HasParent, 'HasParent');
     RegisterMethod(@TCONTROL.CLIENTTOSCREEN, 'ClientToScreen');
-    RegisterMethod(@TCONTROL.DRAGGING, 'Dragging');
    {$IFNDEF FPC}
     RegisterMethod(@TCONTROL.BEGINDRAG, 'BeginDrag');
     RegisterMethod(@TCONTROL.ENDDRAG, 'EndDrag');
@@ -136,11 +155,18 @@ procedure TControlVisibleW(Self: TControl; T: Boolean); begin Self.Visible:= T; 
 procedure TControlParentR(Self: TControl; var T: TWinControl); begin T := Self.Parent; end;
 procedure TControlParentW(Self: TControl; T: TWinControl); begin Self.Parent:= T; end;
 
-
-procedure TCONTROLSHOWHINT_W(Self: TCONTROL; T: BOOLEAN); begin Self.SHOWHINT := T; end;
-procedure TCONTROLSHOWHINT_R(Self: TCONTROL; var T: BOOLEAN); begin T := Self.SHOWHINT; end;
 procedure TCONTROLENABLED_W(Self: TCONTROL; T: BOOLEAN); begin Self.ENABLED := T; end;
 procedure TCONTROLENABLED_R(Self: TCONTROL; var T: BOOLEAN); begin T := Self.ENABLED; end;
+
+{$IFDEF DELPHI23UP}
+procedure TControlStyleElementsR(Self: TControl; var T: TStyleElements); begin T := Self.StyleElements; end;
+procedure TControlStyleElementsW(Self: TControl; T: TStyleElements); begin Self.StyleElements:= T; end;
+{$ENDIF}
+
+{$IFDEF DELPHI26UP}
+procedure TControlStyleNameR(Self: TControl; var T: string); begin T := Self.StyleName; end;
+procedure TControlStyleNameW(Self: TControl; T: string); begin Self.StyleName:= T; end;
+{$ENDIF}
 
 procedure RIRegisterTControl(Cl: TPSRuntimeClassImporter);
 begin
@@ -164,13 +190,19 @@ begin
     RegisterPropertyHelper(@TControlVisibleR, @TControlVisibleW, 'Visible');
     RegisterPropertyHelper(@TCONTROLENABLED_R, @TCONTROLENABLED_W, 'Enabled');
 
+    {$IFDEF DELPHI23UP}
+    RegisterPropertyHelper(@TControlStyleElementsR, @TControlStyleElementsW, 'StyleElements');
+    {$ENDIF}
+    {$IFDEF DELPHI26UP}
+    RegisterPropertyHelper(@TControlStyleNameR, @TControlStyleNameW, 'StyleName');
+    {$ENDIF}
+
     RegisterPropertyHelper(@TControlParentR, @TControlParentW, 'Parent');
 
     {$IFNDEF PS_MINIVCL}
     RegisterMethod(@TControl.Dragging, 'Dragging');
     RegisterMethod(@TControl.HasParent, 'HasParent');
     RegisterMethod(@TCONTROL.CLIENTTOSCREEN, 'ClientToScreen');
-    RegisterMethod(@TCONTROL.DRAGGING, 'Dragging');
    {$IFNDEF FPC}
     RegisterMethod(@TCONTROL.BEGINDRAG, 'BeginDrag');
     RegisterMethod(@TCONTROL.ENDDRAG, 'EndDrag');
@@ -195,7 +227,7 @@ type
   TWinControl_PSHelper = class helper for TWinControl
   public
     {$IFNDEF CLX}
-    procedure HandleR(var T: Longint);
+    procedure HandleR(var T: HWND);
     {$ENDIF}
     procedure ShowingR(var T: Boolean);
     procedure TabOrderR(var T: Longint);
@@ -208,7 +240,7 @@ type
   end;
 
 {$IFNDEF CLX}
-procedure TWinControl_PSHelper.HandleR(var T: Longint); begin T := Self.Handle; end;
+procedure TWinControl_PSHelper.HandleR(var T: HWND); begin T := Self.Handle; end;
 {$ENDIF}
 procedure TWinControl_PSHelper.ShowingR(var T: Boolean); begin T := Self.Showing; end;
 
@@ -261,7 +293,7 @@ end;
 
 {$ELSE}
 {$IFNDEF CLX}
-procedure TWinControlHandleR(Self: TWinControl; var T: Longint); begin T := Self.Handle; end;
+procedure TWinControlHandleR(Self: TWinControl; var T: HWND); begin T := Self.Handle; end;
 {$ENDIF}
 procedure TWinControlShowingR(Self: TWinControl; var T: Boolean); begin T := Self.Showing; end;
 
@@ -337,8 +369,6 @@ type
   public
     procedure MouseDeltaY_R(var T: Double);
     procedure MouseDeltaX_R(var T: Double);
-    procedure DragTarget_W(const T: Pointer);
-    procedure DragTarget_R(var T: Pointer);
     procedure DragTargetPos_W(const T: TPoint);
     procedure DragTargetPos_R(var T: TPoint);
     procedure DragPos_W(const T: TPoint);
@@ -356,14 +386,6 @@ begin T := Self.MouseDeltaY; end;
 (*----------------------------------------------------------------------------*)
 procedure TDragObject_PSHelper.MouseDeltaX_R(var T: Double);
 begin T := Self.MouseDeltaX; end;
-
-(*----------------------------------------------------------------------------*)
-procedure TDragObject_PSHelper.DragTarget_W(const T: Pointer);
-begin Self.DragTarget := T; end;
-
-(*----------------------------------------------------------------------------*)
-procedure TDragObject_PSHelper.DragTarget_R(var T: Pointer);
-begin T := Self.DragTarget; end;
 
 (*----------------------------------------------------------------------------*)
 procedure TDragObject_PSHelper.DragTargetPos_W(const T: TPoint);
@@ -417,7 +439,6 @@ begin
     RegisterPropertyHelper(@TDragObject.DragHandle_R,@TDragObject.DragHandle_W,'DragHandle');
     RegisterPropertyHelper(@TDragObject.DragPos_R,@TDragObject.DragPos_W,'DragPos');
     RegisterPropertyHelper(@TDragObject.DragTargetPos_R,@TDragObject.DragTargetPos_W,'DragTargetPos');
-    RegisterPropertyHelper(@TDragObject.DragTarget_R,@TDragObject.DragTarget_W,'DragTarget');
     RegisterPropertyHelper(@TDragObject.MouseDeltaX_R,nil,'MouseDeltaX');
     RegisterPropertyHelper(@TDragObject.MouseDeltaY_R,nil,'MouseDeltaY');
 {$ENDIF}
@@ -434,14 +455,6 @@ begin T := Self.MouseDeltaY; end;
 (*----------------------------------------------------------------------------*)
 procedure TDragObjectMouseDeltaX_R(Self: TDragObject; var T: Double);
 begin T := Self.MouseDeltaX; end;
-
-(*----------------------------------------------------------------------------*)
-procedure TDragObjectDragTarget_W(Self: TDragObject; const T: Pointer);
-begin Self.DragTarget := T; end;
-
-(*----------------------------------------------------------------------------*)
-procedure TDragObjectDragTarget_R(Self: TDragObject; var T: Pointer);
-begin T := Self.DragTarget; end;
 
 (*----------------------------------------------------------------------------*)
 procedure TDragObjectDragTargetPos_W(Self: TDragObject; const T: TPoint);
@@ -495,7 +508,6 @@ begin
     RegisterPropertyHelper(@TDragObjectDragHandle_R,@TDragObjectDragHandle_W,'DragHandle');
     RegisterPropertyHelper(@TDragObjectDragPos_R,@TDragObjectDragPos_W,'DragPos');
     RegisterPropertyHelper(@TDragObjectDragTargetPos_R,@TDragObjectDragTargetPos_W,'DragTargetPos');
-    RegisterPropertyHelper(@TDragObjectDragTarget_R,@TDragObjectDragTarget_W,'DragTarget');
     RegisterPropertyHelper(@TDragObjectMouseDeltaX_R,nil,'MouseDeltaX');
     RegisterPropertyHelper(@TDragObjectMouseDeltaY_R,nil,'MouseDeltaY');
 {$ENDIF}
@@ -506,12 +518,14 @@ end;
 {$ENDIF}
 {$IFDEF DELPHI10UP}{$ENDREGION}{$ENDIF}
 
+{$IFDEF DELPHI4UP}
 {$IFDEF DELPHI10UP}{$REGION 'TSizeConstraints'}{$ENDIF}
 procedure RIRegisterTSizeConstraints(cl: TPSRuntimeClassImporter);
 begin
   Cl.Add(TSizeConstraints);
 end;
 {$IFDEF DELPHI10UP}{$ENDREGION}{$ENDIF}
+{$ENDIF}
 
 {$IFDEF DELPHI10UP}{$REGION 'Controls'}{$ENDIF}
 procedure RIRegister_Controls(Cl: TPSRuntimeClassImporter);
@@ -521,7 +535,9 @@ begin
   RIRegisterTGraphicControl(cl);
   RIRegisterTCustomControl(cl);
   RIRegister_TDragObject(cl);
+  {$IFDEF DELPHI4UP}
   RIRegisterTSizeConstraints(cl);
+  {$ENDIF}
 end;
 {$IFDEF DELPHI10UP}{$ENDREGION}{$ENDIF}
 

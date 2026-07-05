@@ -73,7 +73,7 @@ var
       btSingle: Result := 'Single';
       btDouble: Result := 'Double';
       btExtended: Result := 'Extended';
-      btString: Result := 'String';
+      btString: if TypeInfo(tbtString) = TypeInfo(AnsiString) then  Result := 'AnsiString' else Result := 'string';
       btRecord:
         begin
           Result := 'Record(';
@@ -296,6 +296,7 @@ var
             7: s:= 'AND';
             8: s:= 'OR';
             9: s:= 'XOR';
+            10: s:= 'AS';
             else
               exit;
             end;

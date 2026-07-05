@@ -33,8 +33,8 @@ type
   TFont_PSHelper = class helper for TFont
   public
     {$IFNDEF CLX}
-    procedure HandleR(var T: Longint);
-    procedure HandleW(T: Longint);
+    procedure HandleR(var T: HFONT);
+    procedure HandleW(T: HFONT);
     {$ENDIF}
     procedure PixelsPerInchR(var T: Longint);
     procedure PixelsPerInchW(T: Longint);
@@ -42,8 +42,8 @@ type
     procedure StyleW(T: TFontStyles);
   end;
 {$IFNDEF CLX}
-procedure TFont_PSHelper.HandleR(var T: Longint); begin T := Self.Handle; end;
-procedure TFont_PSHelper.HandleW(T: Longint); begin Self.Handle := T; end;
+procedure TFont_PSHelper.HandleR(var T: HFONT); begin T := Self.Handle; end;
+procedure TFont_PSHelper.HandleW(T: HFONT); begin Self.Handle := T; end;
 {$ENDIF}
 procedure TFont_PSHelper.PixelsPerInchR(var T: Longint); begin T := Self.PixelsPerInch; end;
 procedure TFont_PSHelper.PixelsPerInchW(T: Longint); begin {$IFNDEF FPC} Self.PixelsPerInch := T;{$ENDIF} end;
@@ -64,8 +64,8 @@ begin
 end;
 {$ELSE}
 {$IFNDEF CLX}
-procedure TFontHandleR(Self: TFont; var T: Longint); begin T := Self.Handle; end;
-procedure TFontHandleW(Self: TFont; T: Longint); begin Self.Handle := T; end;
+procedure TFontHandleR(Self: TFont; var T: HFONT); begin T := Self.Handle; end;
+procedure TFontHandleW(Self: TFont; T: HFONT); begin Self.Handle := T; end;
 {$ENDIF}
 procedure TFontPixelsPerInchR(Self: TFont; var T: Longint); begin T := Self.PixelsPerInch; end;
 procedure TFontPixelsPerInchW(Self: TFont; T: Longint); begin {$IFNDEF FPC} Self.PixelsPerInch := T;{$ENDIF} end;
@@ -93,12 +93,13 @@ type
   TCanvas_PSHelper = class helper for TCanvas
   public
     {$IFNDEF CLX}
-    procedure HandleR(var T: Longint);
-    procedure HandleW(T: Longint);
+    procedure HandleR(var T: HDC);
+    procedure HandleW(T: HDC);
     {$ENDIF}
 
     procedure PixelsR(var T: Longint; X,Y: Longint);
     procedure PixelsW(T, X, Y: Longint);
+    (*
     {$IFDEF FPC}
     procedure Arc(Self : TCanvas; X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer);
     procedure Chord(Self : TCanvas; X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer);
@@ -108,15 +109,17 @@ type
     procedure FillRect(Self : TCanvas; const Rect: TRect);
     procedure FloodFill(Self : TCanvas; X, Y: Integer; Color: TColor; FillStyle: TFillStyle);
     {$ENDIF}
+    *)
   end;
 
 {$IFNDEF CLX}
-procedure TCanvas_PSHelper.HandleR(var T: Longint); begin T := Self.Handle; end;
-procedure TCanvas_PSHelper.HandleW(T: Longint); begin Self.Handle:= T; end;
+procedure TCanvas_PSHelper.HandleR(var T: HDC); begin T := Self.Handle; end;
+procedure TCanvas_PSHelper.HandleW(T: HDC); begin Self.Handle:= T; end;
 {$ENDIF}
 
 procedure TCanvas_PSHelper.PixelsR(var T: Longint; X,Y: Longint); begin T := Self.Pixels[X,Y]; end;
 procedure TCanvas_PSHelper.PixelsW(T, X, Y: Longint); begin Self.Pixels[X,Y]:= T; end;
+(*
 {$IFDEF FPC}
 procedure TCanvas_PSHelper.Arc(Self : TCanvas; X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer); begin Self.Arc(X1, Y1, X2, Y2, X3, Y3, X4, Y4); end;
 procedure TCanvas_PSHelper.Chord(Self : TCanvas; X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer); begin self.Chord(X1, Y1, X2, Y2, X3, Y3, X4, Y4); end;
@@ -126,7 +129,7 @@ procedure TCanvas_PSHelper.Ellipse(Self : TCanvas;X1, Y1, X2, Y2: Integer); begi
 procedure TCanvas_PSHelper.FillRect(Self : TCanvas; const Rect: TRect); begin self.FillRect(rect); end;
 procedure TCanvas_PSHelper.FloodFill(Self : TCanvas; X, Y: Integer; Color: TColor; FillStyle: TFillStyle); begin self.FloodFill(x,y,color,fillstyle); end;
 {$ENDIF}
-
+*)
 procedure RIRegisterTCanvas(cl: TPSRuntimeClassImporter); // requires TPersistent
 begin
   with Cl.Add(TCanvas) do
@@ -164,8 +167,8 @@ end;
 {$ELSE}
 
 {$IFNDEF CLX}
-procedure TCanvasHandleR(Self: TCanvas; var T: Longint); begin T := Self.Handle; end;
-procedure TCanvasHandleW(Self: TCanvas; T: Longint); begin Self.Handle:= T; end;
+procedure TCanvasHandleR(Self: TCanvas; var T: HDC); begin T := Self.Handle; end;
+procedure TCanvasHandleW(Self: TCanvas; T: HDC); begin Self.Handle:= T; end;
 {$ENDIF}
 
 procedure TCanvasPixelsR(Self: TCanvas; var T: Longint; X,Y: Longint); begin T := Self.Pixels[X,Y]; end;

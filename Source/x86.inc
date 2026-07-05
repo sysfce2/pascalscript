@@ -77,14 +77,14 @@ begin
     @@2:
     call p
     fstp tbyte ptr [e]
-    @@5:
     mov ecx, stackdatalen
-    jecxz @@2
-    @@6:
+    jecxz @@4
+    @@3:
     pop edx
     dec ecx
     or ecx, ecx
-    jnz @@6
+    jnz @@3
+    @@4:
   end;
   Result := E;
 end;
@@ -244,6 +244,19 @@ end;
 const
   EmptyPchar: array[0..0] of char = #0;
 
+{$IFDEF DELPHI}{$IFDEF MSWINDOWS}{$DEFINE DELPHI_and_MSWINDOWS}{$ENDIF}{$ENDIF}
+
+{$IFDEF DELPHI_and_MSWINDOWS}
+{ Delphi Win32 passes a by-value record or static array of 4 bytes
+  containing managed data (such as record S: String end) without reference
+  counting the raw copy, like a by-value string parameter. Older versions are
+  the exception: under stdcall/cdecl/safecall the caller must pass a
+  reference counted copy that the callee finalizes at exit. It is unknown
+  exactly when this changed, only that it is off in 10.4 and on in 12.2, so
+  Delphi 12 is used as the boundary. }
+{$IFDEF DELPHI_ATHENS_UP}{$DEFINE DELPHI_SMALL_MANAGED_BORROW}{$ENDIF}
+{$ENDIF}
+
 function TPSExec.InnerfuseCall(_Self, Address: Pointer; CallingConv: TPSCallingConvention; Params: TPSList; res: PPSVariantIFC): Boolean;
 var
   Stack: ansistring;
@@ -273,12 +286,36 @@ var
     Result := p;
   end;
 
+  function ResultUsesResultPointer(res: PPSVariantIFC): Boolean;
+  begin
+    {$IFDEF DELPHI_and_MSWINDOWS}
+    { Delphi Win32 ABI: a record result is returned in AL/AX at sizes 1 and 2,
+      and in EAX at size 4 only when the record contains no managed field;
+      size 3, every size above 4, and the managed 4-byte record are written
+      through a hidden result pointer (see System.Rtti's UseResultPointer).
+      The rule does not depend on the calling convention. Static arrays follow
+      the same rule: UseResultPointer treats tkArray like tkRecord. }
+    if res^.aType.BaseType in [btRecord, btStaticArray] then
+      Result := not (res^.aType.RealSize in [1, 2]) and
+        ((res^.aType.RealSize <> 4) or IsManagedType(res^.aType))
+    else
+    {$ENDIF}
+    begin
+      {$IFDEF MSWINDOWS}
+      Result := res^.aType.RealSize > 4;
+      {$ELSE}
+      Result := True;
+      {$ENDIF}
+    end;
+  end;
+
   function GetPtr(fVar: PPSVariantIFC): Boolean;
   var
     varPtr: Pointer;
     UseReg: Boolean;
     tempstr: tbtstring;
     p: Pointer;
+    DataSize: Cardinal;
   begin
     Result := False;
     if FVar = nil then exit;
@@ -328,7 +365,7 @@ var
         btClass,
         {$IFNDEF PS_NOWIDESTRING} btUnicodeString, btWideString, btWideChar, {$ENDIF} btU8, btS8, btU16,
         btS16, btU32, btS32, btSingle, btDouble, btExtended, btString, btPChar, btChar, btCurrency
-        {$IFNDEF PS_NOINT64}, bts64{$ENDIF}:
+        {$IFNDEF PS_NOINT64}, bts64, btU64{$ENDIF}:
           begin
             Varptr := fvar.Dta;
           end;
@@ -348,15 +385,67 @@ var
     end else begin
       UseReg := True;
       case fVar^.aType.BaseType of
-        btSet:
+        btSet, btRecord:
           begin
-            tempstr := StringOfChar(AnsiChar(#0),4);
-            case TPSTypeRec_Set(fvar.aType).aByteSize of
-              1: Byte((@tempstr[1])^) := byte(fvar.dta^);
-              2: word((@tempstr[1])^) := word(fvar.dta^);
-              3, 4: cardinal((@tempstr[1])^) := cardinal(fvar.dta^);
-              else
-                pointer((@tempstr[1])^) := fvar.dta;
+            if fVar^.aType.BaseType = btSet then
+              DataSize := TPSTypeRec_Set(fvar.aType).aByteSize
+            else
+              DataSize := fvar^.aType.RealSize;
+            {$IFDEF DELPHI_and_MSWINDOWS}
+            { Delphi Win32 ABI: under the register and pascal conventions a
+              record is passed by value at sizes 1, 2, and 4 (in a register
+              when one is free), by value on the stack at size 3, and by
+              reference at 5 and up. Under stdcall/cdecl/safecall a record is
+              passed by value on the stack at every size, rounded up to whole
+              4-byte slots; except that when it contains managed data the
+              caller must reference count the pushed copy. For a 4-byte
+              managed record this is done in the size-4 case below (older
+              Delphi only; see DELPHI_SMALL_MANAGED_BORROW); for a larger
+              managed record it is not implemented, so a pointer is passed
+              instead and the native side must declare the parameter as const
+              to match (a const record of 5 bytes and up is passed by
+              reference). A set is by value at its native size of 1, 2, or 4
+              bytes (a 3-byte ROPS set is a native 4-byte set, copied with
+              zero extension) and by reference at 5 and up, under all
+              conventions. For static arrays see the btVariant/btStaticArray
+              branch below }
+            if (fVar^.aType.BaseType = btRecord) and (DataSize > 4) and
+               (CallingConv in [cdCdecl, cdStdCall, cdSafeCall]) and
+               not IsManagedType(fVar^.aType) then
+            begin
+              UseReg := False;
+              tempstr := StringOfChar(AnsiChar(#0), ((DataSize + 3) div 4) * 4);
+              Move(fvar.dta^, tempstr[1], DataSize);
+            end else
+            {$ENDIF}
+            begin
+              tempstr := StringOfChar(AnsiChar(#0),4);
+              case DataSize of
+                1: Byte((@tempstr[1])^) := byte(fvar.dta^);
+                2: word((@tempstr[1])^) := word(fvar.dta^);
+                {$IFDEF DELPHI_and_MSWINDOWS}
+                3: begin
+                    Move(fvar.dta^, tempstr[1], 3);
+                    if fVar^.aType.BaseType = btRecord then
+                      UseReg := False;
+                  end;
+                4: begin
+                    {$IFNDEF DELPHI_SMALL_MANAGED_BORROW}
+                    if (fVar^.aType.BaseType = btRecord) and
+                       (CallingConv in [cdCdecl, cdStdCall, cdSafeCall]) and
+                       IsManagedType(fVar^.aType) then
+                      { Reference counted copy that the callee finalizes }
+                      CopyArrayContents(@tempstr[1], fvar.dta, 1, fVar^.aType)
+                    else
+                    {$ENDIF}
+                      cardinal((@tempstr[1])^) := cardinal(fvar.dta^);
+                  end;
+                {$ELSE}
+                3, 4: cardinal((@tempstr[1])^) := cardinal(fvar.dta^);
+                {$ENDIF}
+                else
+                  pointer((@tempstr[1])^) := fvar.dta;
+              end;
             end;
           end;
         btArray:
@@ -398,11 +487,35 @@ var
             {$ENDIF}
             end;
           end;
-        btVariant
-        , btStaticArray, btRecord:
+        btVariant, btStaticArray:
           begin
-            TempStr := StringOfChar(AnsiChar(#0),4);
-            Pointer((@TempStr[1])^) := Pointer(fvar.Dta);
+            {$IFDEF DELPHI_and_MSWINDOWS}
+            { Delphi Win32 ABI: a static array of 1-4 bytes is passed by value
+              like a record of that size (1, 2, and 4 in a register when one is
+              free, 3 always by value on the stack; see the btSet/btRecord
+              branch above), and by reference at 5 and up, under all
+              conventions }
+            if (fVar^.aType.BaseType = btStaticArray) and
+               (fvar^.aType.RealSize <= 4) then
+            begin
+              DataSize := fvar^.aType.RealSize;
+              tempstr := StringOfChar(AnsiChar(#0),4);
+              {$IFNDEF DELPHI_SMALL_MANAGED_BORROW}
+              if (CallingConv in [cdCdecl, cdStdCall, cdSafeCall]) and
+                 IsManagedType(fVar^.aType) then
+                { Reference counted copy that the callee finalizes }
+                CopyArrayContents(@tempstr[1], fvar.dta, 1, fVar^.aType)
+              else
+              {$ENDIF}
+                Move(fvar.dta^, tempstr[1], DataSize);
+              if DataSize = 3 then
+                UseReg := False;
+            end else
+            {$ENDIF}
+            begin
+              TempStr := StringOfChar(AnsiChar(#0),4);
+              Pointer((@TempStr[1])^) := Pointer(fvar.Dta);
+            end;
           end;
         btDouble: {8 bytes} begin
             TempStr := StringOfChar(AnsiChar(#0),8);
@@ -480,6 +593,12 @@ var
           begin
             TempStr:= StringOfChar(AnsiChar(#0),8);
             Int64((@TempStr[1])^) := int64(fvar^.dta^);
+            UseReg := False;
+        end;
+        btU64:
+          begin
+            TempStr := StringOfChar(AnsiChar(#0),8);
+            UInt64((@TempStr[1])^) := tbtu64(fvar^.dta^);
             UseReg := False;
         end;{$ENDIF}
       end; {case}
@@ -560,7 +679,11 @@ begin
           if assigned(res) then begin
             case res^.aType.BaseType of
               {$IFNDEF PS_NOWIDESTRING}btWideString, btUnicodeString, {$ENDIF}
-              btInterface, {$IFNDEF FPC} btArray, {$ENDIF}btrecord, {$IFNDEF PS_FPCSTRINGWORKAROUND}btstring, {$ENDIF}btVariant, btStaticArray: GetPtr(res);
+              btInterface, {$IFNDEF FPC} btArray, {$ENDIF}{$IFNDEF PS_FPCSTRINGWORKAROUND}btstring, {$ENDIF}btVariant{$IFNDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}: GetPtr(res);
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if ResultUsesResultPointer(res) then GetPtr(res);
+                end;
               btSet:
                 begin
                   if TPSTypeRec_Set(res.aType).aByteSize >4 then GetPtr(res);
@@ -577,7 +700,10 @@ begin
                   case TPSTypeRec_Set(res.aType).aByteSize  of
                     1: byte(res.Dta^) := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
                     2: word(res.Dta^) := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
-                    3,
+                    3: begin
+                        EAX := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                        Move(EAX, res.Dta^, 3);
+                      end;
                     4: Longint(res.Dta^) := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
                     else RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil)
                   end;
@@ -601,17 +727,31 @@ begin
 
               btu32,bts32{$IFDEF FPC},btArray{$ENDIF}:   tbtu32(res.dta^) := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
               btPChar:       pansichar(res.dta^) := Pansichar(RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil));
-              {$IFNDEF PS_NOINT64}bts64:
+              {$IFNDEF PS_NOINT64}bts64, btU64:
                 begin
                   EAX := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, @EDX);
-                  tbts64(res.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
+                  if res^.aType.BaseType = btU64 then
+                    tbtu64(res.dta^) := UInt64(Cardinal(EDX)) shl 32 or Cardinal(EAX)
+                  else
+                    tbts64(res.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
                 end;
               {$ENDIF}
               btCurrency:    tbtCurrency(res.Dta^) := RealFloatCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4) / 10000;
               btInterface,
-              btVariant,
               {$IFNDEF PS_NOWIDESTRING}btWidestring,btUnicodestring, {$ENDIF}
-              btStaticArray, {$IFNDEF FPC} btArray,{$ENDIF} btrecord{$IFNDEF PS_FPCSTRINGWORKAROUND}, btstring {$ENDIF}: RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+              btVariant{$IFNDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}{$IFNDEF FPC}, btArray{$ENDIF}{$IFNDEF PS_FPCSTRINGWORKAROUND}, btstring{$ENDIF}: RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if not ResultUsesResultPointer(res) then
+                    case res.aType.RealSize of
+                      1: PByte(res.Dta)^ := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                      2: PWord(res.Dta)^ := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    else
+                      PCardinal(res.Dta)^ := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    end
+                  else
+                    RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                end;
               {$IFDEF PS_FPCSTRINGWORKAROUND}
               btstring: begin
                  eax := RealCall_Register(Address, EAX, EDX, ECX, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
@@ -638,7 +778,17 @@ begin
           end;
           if assigned(res) then begin
             case res^.aType.BaseType of
-              {$IFNDEF PS_NOWIDESTRING}btWideString, btUnicodeString, {$ENDIF}btInterface, btArray, btrecord, btstring, btVariant: GetPtr(res);
+              {$IFNDEF PS_NOWIDESTRING}btWideString, btUnicodeString, {$ENDIF}btInterface, btArray, btString, btVariant: GetPtr(res);
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if ResultUsesResultPointer(res) then GetPtr(res);
+                end;
+              {$IFDEF DELPHI_and_MSWINDOWS}
+              btSet:
+                begin
+                  if TPSTypeRec_Set(res.aType).aByteSize > 4 then GetPtr(res);
+                end;
+              {$ENDIF}
             end;
           end;
           if assigned(_Self) then begin
@@ -655,18 +805,49 @@ begin
               btSingle:      tbtsingle(res^.Dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btDouble:      tbtdouble(res^.Dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btExtended:    tbtextended(res^.Dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
+              btCurrency:    tbtCurrency(res^.Dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4) / 10000;
               btChar, btU8, btS8:    tbtu8(res^.Dta^) := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
               {$IFNDEF PS_NOWIDESTRING}btWideChar, {$ENDIF}btu16, bts16:  tbtu16(res^.Dta^) := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
               btClass, btu32, bts32:  tbtu32(res^.Dta^):= RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
               btPChar:       pansichar(res^.dta^) := Pansichar(RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil));
-              {$IFNDEF PS_NOINT64}bts64:
+              {$IFNDEF PS_NOINT64}bts64, btU64:
                 begin
                   EAX := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, @EDX);
-                  tbts64(res^.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
+                  if res^.aType.BaseType = btU64 then
+                    tbtu64(res^.dta^) := UInt64(Cardinal(EDX)) shl 32 or Cardinal(EAX)
+                  else
+                    tbts64(res^.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
                 end;
               {$ENDIF}
-              btVariant,
-              btInterface, btrecord, btstring: RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+              btVariant, {$IFNDEF PS_NOWIDESTRING}btUnicodeString, btWideString, {$ENDIF}
+              btInterface, btArray, btstring: RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if not ResultUsesResultPointer(res) then
+                    case res.aType.RealSize of
+                      1: PByte(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                      2: PWord(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    else
+                      PCardinal(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    end
+                  else
+                    RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                end;
+              {$IFDEF DELPHI_and_MSWINDOWS}
+              btSet:
+                begin
+                  case TPSTypeRec_Set(res.aType).aByteSize of
+                    1: PByte(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                    2: PWord(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    3: begin
+                        EAX := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                        Move(EAX, res.Dta^, 3);
+                      end;
+                    4: PCardinal(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    else RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil)
+                  end;
+                end;
+              {$ENDIF}
             else
               exit;
             end;
@@ -714,19 +895,55 @@ begin
               btSingle:      tbtsingle(res^.dta^) := RealFloatCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btDouble:      tbtdouble(res^.dta^) := RealFloatCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btExtended:    tbtextended(res^.dta^) := RealFloatCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
+              btCurrency:    tbtCurrency(res^.dta^) := RealFloatCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4) / 10000;
               btCHar, btU8, btS8:    tbtu8(res^.dta^) := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
               {$IFNDEF PS_NOWIDESTRING}btWideChar, {$ENDIF}btu16, bts16:  tbtu16(res^.dta^) := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
               btClass, btu32, bts32:  tbtu32(res^.dta^) := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
               btPChar:       pansichar(res^.dta^) := Pansichar(RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil));
-              {$IFNDEF PS_NOINT64}bts64:
+              {$IFNDEF PS_NOINT64}bts64, btU64:
                 begin
                   EAX := RealCall_CDecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, @EDX);
-                  tbts64(res^.Dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
+                  if res^.aType.BaseType = btU64 then
+                    tbtu64(res^.Dta^) := UInt64(Cardinal(EDX)) shl 32 or Cardinal(EAX)
+                  else
+                    tbts64(res^.Dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
                 end;
               {$ENDIF}
               btVariant, {$IFNDEF PS_NOWIDESTRING}btUnicodeString, btWideString, {$ENDIF}
-              btInterface,
-              btArray, btrecord, btstring:      begin GetPtr(res); RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil); end;
+              btInterface, btArray, btstring: begin GetPtr(res); RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil); end;
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if ResultUsesResultPointer(res) then
+                  begin
+                    GetPtr(res);
+                    RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                  end
+                  else
+                    case res.aType.RealSize of
+                      1: PByte(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                      2: PWord(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    else
+                      PCardinal(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    end;
+                end;
+              {$IFDEF DELPHI_and_MSWINDOWS}
+              btSet:
+                begin
+                  case TPSTypeRec_Set(res.aType).aByteSize of
+                    1: PByte(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                    2: PWord(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    3: begin
+                        EAX := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                        Move(EAX, res.Dta^, 3);
+                      end;
+                    4: PCardinal(res.Dta)^ := RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    else begin
+                      GetPtr(res);
+                      RealCall_Cdecl(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                    end;
+                  end;
+                end;
+              {$ENDIF}
             else
               exit;
             end;
@@ -749,18 +966,55 @@ begin
               btSingle:  tbtsingle(res^.dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btDouble:      tbtdouble(res^.dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
               btExtended:    tbtextended(res^.dta^):= RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4);
+              btCurrency:    tbtCurrency(res^.dta^) := RealFloatCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4) / 10000;
               btChar, btU8, btS8:    tbtu8(res^.dta^) := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
               {$IFNDEF PS_NOWIDESTRING}btWideChar, {$ENDIF}btu16, bts16:  tbtu16(res^.dta^) := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
               btclass, btu32, bts32:  tbtu32(res^.dta^) := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
               btPChar:       pansichar(res^.dta^) := Pansichar(RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil));
-              {$IFNDEF PS_NOINT64}bts64:
+              {$IFNDEF PS_NOINT64}bts64, btU64:
                 begin
                   EAX := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, @EDX);
-                  tbts64(res^.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
+                  if res^.aType.BaseType = btU64 then
+                    tbtu64(res^.dta^) := UInt64(Cardinal(EDX)) shl 32 or Cardinal(EAX)
+                  else
+                    tbts64(res^.dta^) := Int64(Cardinal(EDX)) shl 32 or Cardinal(EAX);
                 end;
               {$ENDIF}
               btVariant, {$IFNDEF PS_NOWIDESTRING}btUnicodeString, btWideString, {$ENDIF}
-              btInterface, btArray, btrecord, btstring: begin GetPtr(res); RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil); end;
+              btInterface, btArray, btstring: begin GetPtr(res); RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil); end;
+              btRecord{$IFDEF DELPHI_and_MSWINDOWS}, btStaticArray{$ENDIF}:
+                begin
+                  if ResultUsesResultPointer(res) then
+                  begin
+                    GetPtr(res);
+                    RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                  end
+                  else
+                    case res.aType.RealSize of
+                      1: PByte(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                      2: PWord(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    else
+                      PCardinal(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    end;
+                end;
+              {$IFDEF DELPHI_and_MSWINDOWS}
+              btSet:
+                begin
+                  case TPSTypeRec_Set(res.aType).aByteSize of
+                    1: PByte(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 1, nil);
+                    2: PWord(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 2, nil);
+                    3: begin
+                        EAX := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                        Move(EAX, res.Dta^, 3);
+                      end;
+                    4: PCardinal(res.Dta)^ := RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 4, nil);
+                    else begin
+                      GetPtr(res);
+                      RealCall_Other(Address, @Stack[Length(Stack)-3], Length(Stack) div 4, 0, nil);
+                    end;
+                  end;
+                end;
+              {$ENDIF}
             else
               exit;
             end;
@@ -781,4 +1035,3 @@ begin
     CallData.Free;
   end;
 end;
-

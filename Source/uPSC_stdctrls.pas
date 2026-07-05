@@ -163,8 +163,10 @@ begin
     RegisterMethod('procedure CopyToClipboard');
     RegisterMethod('procedure CutToClipboard');
     RegisterMethod('procedure PasteFromClipboard');
+    {$IFNDEF FPC}
     RegisterMethod('function GetSelTextBuf(Buffer: PChar; BufSize: Integer): Integer');
     RegisterMethod('procedure SetSelTextBuf(Buffer: PChar)');
+    {$ENDIF}
     {$ENDIF}
   end;
 end;
@@ -392,6 +394,12 @@ begin
     RegisterProperty('OnClick', 'TNotifyEvent', iptrw);
     RegisterProperty('OnEnter', 'TNotifyEvent', iptrw);
     RegisterProperty('OnExit', 'TNotifyEvent', iptrw);
+
+    {$IFDEF DELPHI23UP}
+    RegisterProperty('CommandLinkHint', 'string', iptrw);
+    RegisterProperty('ElevationRequired', 'Boolean', iptrw);
+    RegisterProperty('Style', 'TButtonStyle', iptrw);
+    {$ENDIF}
 
     {$IFNDEF PS_MINIVCL}
     RegisterProperty('DragCursor', 'LongInt', iptrw);
@@ -640,18 +648,19 @@ begin
   cl.AddTypeS('TEditCharCase', '(ecNormal, ecUpperCase, ecLowerCase)');
   cl.AddTypeS('TScrollStyle', '(ssNone, ssHorizontal, ssVertical, ssBoth)');
   cl.AddTypeS('TComboBoxStyle', '(csDropDown, csSimple, csDropDownList, csOwnerDrawFixed, csOwnerDrawVariable)');
-  cl.AddTypeS('TDrawItemEvent', 'procedure(Control: TWinControl; Index: Integer; Rect: TRect; State: Byte)');
-  cl.AddTypeS('TMeasureItemEvent', 'procedure(Control: TWinControl; Index: Integer; var Height: Integer)');
+  {$IFDEF DELPHI23UP}
+  cl.AddTypeS('TButtonStyle', '(bsPushButton, bsCommandLink, bsSplitButton)');
+  {$ENDIF}
   cl.AddTypeS('TCheckBoxState', '(cbUnchecked, cbChecked, cbGrayed)');
   cl.AddTypeS('TListBoxStyle', '(lbStandard, lbOwnerDrawFixed, lbOwnerDrawVariable)');
   cl.AddTypeS('TScrollCode', '(scLineUp, scLineDown, scPageUp, scPageDown, scPosition, scTrack, scTop, scBottom, scEndScroll)');
-  cl.AddTypeS('TScrollEvent', 'procedure(Sender: TObject; ScrollCode: TScrollCode; var ScrollPos: Integer)');
-
   Cl.addTypeS('TEOwnerDrawState', '(odSelected, odGrayed, odDisabled, odChecked, odFocused, odDefault, odHotLight, odInactive, odNoAccel, odNoFocusRect, odReserved1, odReserved2, odComboBoxEdit)');
-
-
   cl.AddTypeS('TTextLayout', '(tlTop, tlCenter, tlBottom)');
   cl.AddTypeS('TOwnerDrawState', 'set of TEOwnerDrawState');
+
+  cl.AddTypeS('TDrawItemEvent', 'procedure(Control: TWinControl; Index: Integer; Rect: TRect; State: TOwnerDrawState)');
+  cl.AddTypeS('TMeasureItemEvent', 'procedure(Control: TWinControl; Index: Integer; var Height: Integer)');
+  cl.AddTypeS('TScrollEvent', 'procedure(Sender: TObject; ScrollCode: TScrollCode; var ScrollPos: Integer)');
 end;
 
 
